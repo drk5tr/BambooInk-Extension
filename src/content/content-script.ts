@@ -492,17 +492,24 @@ function scheduleCheck(text: string): void {
   }, settings.debounceMs || 800);
 }
 
+// Get the real target, even inside Shadow DOM
+function getRealTarget(e: Event): HTMLElement | null {
+  const path = e.composedPath();
+  const el = (path.length > 0 ? path[0] : e.target) as HTMLElement;
+  return el || null;
+}
+
 function handleInput(e: Event): void {
-  const el = e.target as HTMLElement;
-  if (!isTextField(el)) return;
+  const el = getRealTarget(e);
+  if (!el || !isTextField(el)) return;
   activeElement = el;
   const text = getTextFromElement(el);
   scheduleCheck(text);
 }
 
 function handleFocusIn(e: FocusEvent): void {
-  const el = e.target as HTMLElement;
-  if (!isTextField(el)) return;
+  const el = getRealTarget(e);
+  if (!el || !isTextField(el)) return;
   activeElement = el;
   const text = getTextFromElement(el);
   if (text.trim().length >= 10) {
