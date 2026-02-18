@@ -11,6 +11,20 @@ let shadowRoot: ShadowRoot | null = null;
 let checkGeneration = 0;
 let interactingWithOverlay = false;
 
+// --- Intercept Shadow DOM to support closed shadow roots (Salesforce LWC) ---
+const trackedShadowRoots: Set<ShadowRoot> = new Set();
+const originalAttachShadow = Element.prototype.attachShadow;
+Element.prototype.attachShadow = function (init: ShadowRootInit): ShadowRoot {
+  const shadow = originalAttachShadow.call(this, { ...init, mode: "open" as const });
+  trackedShadowRoots.add(shadow);
+  // Attach our listeners inside each shadow root
+  shadow.addEventListener("input", handleInput, true);
+  shadow.addEventListener("focusin", handleFocusIn as EventListener, true);
+  shadow.addEventListener("focusout", handleFocusOut as EventListener, true);
+  console.log("[BambooInk] Attached listeners to shadow root on", this.tagName);
+  return shadow;
+};
+
 // Load settings on init (retry if service worker isn't ready)
 function loadSettings(): void {
   chrome.runtime.sendMessage({ action: "get-settings" }, (s: Settings) => {
