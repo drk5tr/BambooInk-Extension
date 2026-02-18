@@ -537,4 +537,33 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// --- MutationObserver for SPA support (Salesforce, etc.) ---
+// Watch for dynamically added contenteditable/textarea elements and attach listeners
+const observer = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    for (const node of mutation.addedNodes) {
+      if (node instanceof HTMLElement) {
+        // Check the node itself and any text fields inside it
+        const fields = node.querySelectorAll
+          ? [node, ...node.querySelectorAll("textarea, input, [contenteditable]")]
+          : [node];
+        for (const field of fields) {
+          if (field instanceof HTMLElement && isTextField(field) && document.activeElement === field) {
+            activeElement = field;
+            const text = getTextFromElement(field);
+            if (text.trim().length >= 10) {
+              scheduleCheck(text);
+            }
+          }
+        }
+      }
+    }
+  }
+});
+
+observer.observe(document.body, {
+  childList: true,
+  subtree: true,
+});
+
 console.log("[BambooInk] Content script loaded");
