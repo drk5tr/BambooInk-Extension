@@ -1,0 +1,29 @@
+name: Build Extension
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build extension
+        env:
+          BAMBOOINK_API_KEY: ${{ secrets.BAMBOOINK_API_KEY }}
+        run: npx webpack --mode production
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BambooInk-Extension
+          path: dist/
