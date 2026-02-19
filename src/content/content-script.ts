@@ -1,12 +1,6 @@
 import "./content-script.css";
 import type { Issue, Settings } from "../shared/types";
 
-declare global {
-  interface Window {
-    __bambooinkShadowRoots: ShadowRoot[];
-  }
-}
-
 let settings: Settings | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let currentIssues: Issue[] = [];
@@ -17,43 +11,40 @@ let shadowRoot: ShadowRoot | null = null;
 let checkGeneration = 0;
 let interactingWithOverlay = false;
 
-// Shadow roots collected by shadow-hook.ts (runs at document_start)
+// Track shadow roots we've already attached listeners to
 const listenedShadowRoots = new WeakSet<ShadowRoot>();
+// Keep a strong reference list for polling
+const knownShadowRoots: ShadowRoot[] = [];
 
 // --- Attach listeners to a shadow root (idempotent) ---
 function attachShadowListeners(shadow: ShadowRoot): void {
   if (listenedShadowRoots.has(shadow)) return;
   listenedShadowRoots.add(shadow);
+  knownShadowRoots.push(shadow);
   shadow.addEventListener("input", handleInput, true);
   shadow.addEventListener("focusin", handleFocusIn as EventListener, true);
   shadow.addEventListener("focusout", handleFocusOut as EventListener, true);
   console.log("[BambooInk] Attached listeners to shadow root on", shadow.host?.tagName);
+
+  // Also observe mutations inside this shadow root
+  const shadowObserver = new MutationObserver(() => {
+    walkDOMForShadowRoots(shadow);
+  });
+  shadowObserver.observe(shadow, { childList: true, subtree: true });
 }
 
-// --- Process all shadow roots collected by the early hook ---
-function processCollectedShadowRoots(): void {
-  const roots = window.__bambooinkShadowRoots || [];
-  for (const shadow of roots) {
-    attachShadowListeners(shadow);
-  }
-}
-
-// --- Recursively walk DOM to find shadow roots (for any missed before hook loaded) ---
-function walkDOMForShadowRoots(node: Element): void {
-  if (node.shadowRoot) {
-    attachShadowListeners(node.shadowRoot);
-    // Also walk inside shadow root
-    for (const child of node.shadowRoot.querySelectorAll("*")) {
-      walkDOMForShadowRoots(child);
+// --- Recursively walk DOM/shadow trees to find open shadow roots ---
+function walkDOMForShadowRoots(root: ShadowRoot | Element): void {
+  const elements = root.querySelectorAll("*");
+  for (const el of elements) {
+    if (el.shadowRoot) {
+      attachShadowListeners(el.shadowRoot);
+      walkDOMForShadowRoots(el.shadowRoot);
     }
   }
-  for (const child of node.querySelectorAll("*")) {
-    if (child.shadowRoot) {
-      attachShadowListeners(child.shadowRoot);
-      for (const innerChild of child.shadowRoot.querySelectorAll("*")) {
-        walkDOMForShadowRoots(innerChild);
-      }
-    }
+  // Check root itself if it's an element
+  if (root instanceof Element && root.shadowRoot) {
+    attachShadowListeners(root.shadowRoot);
   }
 }
 
@@ -573,18 +564,14 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// --- Shadow DOM: process roots collected by early hook + scan existing DOM ---
+// --- Shadow DOM: scan existing DOM for open shadow roots ---
 
-processCollectedShadowRoots();
 walkDOMForShadowRoots(document.documentElement);
-console.log("[BambooInk] Initial shadow root scan complete, tracked:", window.__bambooinkShadowRoots?.length || 0);
+console.log("[BambooInk] Initial shadow root scan complete, tracked:", knownShadowRoots.length);
 
 // --- MutationObserver for SPA support (Salesforce, etc.) ---
 // Watch for dynamically added elements, check for shadow roots and text fields
 const observer = new MutationObserver((mutations) => {
-  // Process any new shadow roots collected since last check
-  processCollectedShadowRoots();
-
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
       if (node instanceof HTMLElement) {
@@ -621,12 +608,11 @@ let lastPolledText = "";
 setInterval(() => {
   if (!settings?.enabled || !settings?.apiKey) return;
 
-  // Process any new shadow roots
-  processCollectedShadowRoots();
+  // Re-scan DOM for any new shadow roots (SPA navigation, lazy-loaded components)
+  walkDOMForShadowRoots(document.documentElement);
 
   // Search for focused contenteditable elements inside tracked shadow roots
-  const roots = window.__bambooinkShadowRoots || [];
-  for (const shadow of roots) {
+  for (const shadow of knownShadowRoots) {
     try {
       // Look for focused contenteditable inside this shadow root
       const active = shadow.activeElement;
@@ -644,14 +630,17 @@ setInterval(() => {
       // Also check for contenteditable elements that might be focused
       const editables = shadow.querySelectorAll("[contenteditable]");
       for (const el of editables) {
-        if (el instanceof HTMLElement && el === shadow.activeElement) {
+        if (el instanceof HTMLElement) {
           const text = getTextFromElement(el);
           if (text.trim().length >= 10 && text !== lastPolledText) {
-            console.log("[BambooInk] Poller found contenteditable in shadow root:", el.className);
-            activeElement = el;
-            lastPolledText = text;
-            scheduleCheck(text);
-            return;
+            // Check if this element or its parent has focus
+            if (el.contains(document.activeElement) || shadow.activeElement === el || document.activeElement?.contains(shadow.host)) {
+              console.log("[BambooInk] Poller found contenteditable in shadow root:", el.className || el.tagName);
+              activeElement = el;
+              lastPolledText = text;
+              scheduleCheck(text);
+              return;
+            }
           }
         }
       }
