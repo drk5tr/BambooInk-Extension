@@ -27,6 +27,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
           action: "render-overlay-from-iframe",
           issues: (message as any).issues,
           iframeSelector: (message as any).iframeSelector,
+          caretRect: (message as any).caretRect,
         }, { frameId: 0 });
       }
       sendResponse({ ok: true });

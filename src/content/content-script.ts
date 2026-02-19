@@ -436,9 +436,12 @@ function renderOverlay(): void {
         console.log("[BambooInk] Accept clicked, activeElement:", targetEl?.tagName, "original:", issue.original);
         if (targetEl) {
           replaceTextInElement(targetEl, issue.original, issue.suggestion);
+          // Update lastCheckedText to post-replacement text so we don't re-trigger
+          setTimeout(() => {
+            lastCheckedText = getTextFromElement(targetEl).trim();
+          }, 250);
         }
         currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-        lastCheckedText = "";
         setTimeout(() => renderOverlay(), 100);
       });
 
@@ -514,11 +517,12 @@ function scheduleCheck(text: string): void {
 
         if (currentIssues.length > 0) {
           if (isInIframe) {
-            // Relay issues to the top frame for rendering
+            // Relay issues to the top frame for rendering, with caret position
             chrome.runtime.sendMessage({
               action: "relay-overlay-to-top",
               issues: response.issues,
               iframeSelector: iframeSelector,
+              caretRect: getCaretRectForTopFrame(),
             });
           } else {
             renderOverlay();
@@ -529,6 +533,40 @@ function scheduleCheck(text: string): void {
       }
     );
   }, settings.debounceMs || 800);
+}
+
+// Get caret rect translated to the top frame's coordinate space
+function getCaretRectForTopFrame(): { x: number; y: number; width: number; height: number } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(false);
+  const rects = range.getClientRects();
+  let rect: { x: number; y: number; width: number; height: number } | null = null;
+  if (rects.length > 0) {
+    const r = rects[rects.length - 1];
+    rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+  } else if (activeElement) {
+    const r = activeElement.getBoundingClientRect();
+    rect = { x: r.right - 20, y: r.bottom, width: 0, height: 0 };
+  }
+  if (!rect) return null;
+
+  // Walk up the iframe chain, adding each frame's offset
+  let win: Window = window;
+  while (win !== win.top) {
+    try {
+      const fe = win.frameElement;
+      if (!fe) break;
+      const feRect = fe.getBoundingClientRect();
+      rect.x += feRect.x;
+      rect.y += feRect.y;
+      win = win.parent;
+    } catch (e) {
+      break; // Cross-origin, can't walk further
+    }
+  }
+  return rect;
 }
 
 // Get the real target, even inside Shadow DOM
@@ -618,55 +656,14 @@ observer.observe(document.body, {
   subtree: true,
 });
 
-// --- Polling fallback for CKEditor iframes + Shadow DOM ---
-// CKEditor replaces the iframe document after content script loads,
-// destroying all event listeners. We poll to find and attach to these iframes.
+// --- Polling fallback for Shadow DOM ---
 let lastPolledText = "";
-const attachedIframeDocs = new WeakSet<Document>();
-
-function attachToIframeDoc(doc: Document): void {
-  if (attachedIframeDocs.has(doc)) return;
-  attachedIframeDocs.add(doc);
-  doc.addEventListener("input", handleInput, true);
-  doc.addEventListener("focusin", handleFocusIn as EventListener, true);
-  doc.addEventListener("focusout", handleFocusOut as EventListener, true);
-  console.log("[BambooInk] Attached listeners to iframe document:", doc.title || "untitled");
-}
-
-function findCKEditorIframes(): void {
-  // Look for CKEditor iframes (class cke_wysiwyg_frame) and any contenteditable iframes
-  const iframes = document.querySelectorAll("iframe.cke_wysiwyg_frame, iframe[title*='Email'], iframe[title*='Editor']");
-  for (const iframe of iframes) {
-    try {
-      const doc = (iframe as HTMLIFrameElement).contentDocument;
-      if (doc && doc.body) {
-        attachToIframeDoc(doc);
-        // Check for text while we're here
-        if (doc.body.isContentEditable || doc.designMode === "on") {
-          const text = (doc.body.innerText || "").replace(/\u00a0/g, " ");
-          if (text.trim().length >= 10 && text !== lastPolledText) {
-            console.log("[BambooInk] Poller found CKEditor content, length:", text.trim().length);
-            activeElement = doc.body;
-            lastPolledText = text;
-            scheduleCheck(text);
-            return;
-          }
-        }
-      }
-    } catch (e) {
-      // Cross-origin iframe, skip
-    }
-  }
-}
 
 setInterval(() => {
   if (!settings?.enabled || !settings?.apiKey) return;
 
   // Re-scan DOM for any new shadow roots (SPA navigation, lazy-loaded components)
   walkDOMForShadowRoots(document.documentElement);
-
-  // Find and attach to CKEditor iframes
-  findCKEditorIframes();
 
   // Search for focused contenteditable elements inside tracked shadow roots
   for (const shadow of knownShadowRoots) {
@@ -722,9 +719,13 @@ function setupCKEditorSelfDetection(): void {
       if (target && (target.isContentEditable || target instanceof HTMLTextAreaElement)) {
         console.log("[BambooInk] Iframe received replace command, target:", target.tagName);
         replaceTextInElement(target, message.original, message.suggestion);
-        // Reset checked text so next poll picks up the change
-        lastCheckedText = "";
-        lastPolledText = "";
+        // Set lastPolledText to post-replacement text so poller doesn't re-trigger
+        // until user actually types something new
+        setTimeout(() => {
+          const newText = (document.body.innerText || "").replace(/\u00a0/g, " ");
+          lastPolledText = newText;
+          lastCheckedText = newText.trim();
+        }, 250);
       }
     }
   });
@@ -781,6 +782,8 @@ setupCKEditorSelfDetection();
 if (!isInIframe) {
   // Track the source iframe selector for relaying Accept commands back
   let iframeOverlaySource = "";
+  // Only reposition when issues actually change
+  let lastIframeIssueIds = "";
 
   // Find the outermost iframe in the top document that contains the editor
   // (walks all direct iframes and picks the one related to the email composer)
@@ -821,24 +824,45 @@ if (!isInIframe) {
       if (currentIssues.length > 0) {
         const { container } = ensureOverlayContainer();
 
-        // Position near the editor iframe in the top document
-        const iframeRect = findEditorIframeRect();
-        if (iframeRect) {
-          // Bottom-right corner of the iframe, inside the visible area
-          let x = iframeRect.right - 360;
-          let y = iframeRect.bottom - 80;
-          if (x < iframeRect.left) x = iframeRect.left + 10;
-          if (x < 10) x = 10;
-          if (y + 200 > window.innerHeight) y = iframeRect.top + 10;
-          if (y < 10) y = 10;
-          container.style.left = `${x}px`;
-          container.style.top = `${y}px`;
-        } else {
-          // No iframe found — position bottom-right of viewport
-          container.style.right = "20px";
-          container.style.bottom = "20px";
-          container.style.left = "auto";
-          container.style.top = "auto";
+        // Only reposition when the set of issues changes (not on every re-check)
+        const newIssueIds = currentIssues.map((i: any) => i.id).sort().join(",");
+        const issuesChanged = newIssueIds !== lastIframeIssueIds;
+        lastIframeIssueIds = newIssueIds;
+
+        if (issuesChanged) {
+          // Position near the caret if we have coordinates from the iframe
+          const caret = message.caretRect;
+          if (caret) {
+            let x = caret.x + 10;
+            let y = caret.y + (caret.height || 16) + 8;
+            // Keep overlay on screen
+            if (x + 350 > window.innerWidth) x = window.innerWidth - 360;
+            if (x < 10) x = 10;
+            if (y + 300 > window.innerHeight) y = caret.y - 308;
+            if (y < 10) y = 10;
+            container.style.left = `${x}px`;
+            container.style.top = `${y}px`;
+            container.style.right = "auto";
+            container.style.bottom = "auto";
+          } else {
+            // Fallback: position near the editor iframe
+            const iframeRect = findEditorIframeRect();
+            if (iframeRect) {
+              let x = iframeRect.right - 360;
+              let y = iframeRect.bottom - 80;
+              if (x < iframeRect.left) x = iframeRect.left + 10;
+              if (x < 10) x = 10;
+              if (y + 200 > window.innerHeight) y = iframeRect.top + 10;
+              if (y < 10) y = 10;
+              container.style.left = `${x}px`;
+              container.style.top = `${y}px`;
+            } else {
+              container.style.right = "20px";
+              container.style.bottom = "20px";
+              container.style.left = "auto";
+              container.style.top = "auto";
+            }
+          }
         }
 
         renderOverlayForIframe(iframeOverlaySource);
@@ -920,7 +944,6 @@ if (!isInIframe) {
             suggestion: issue.suggestion,
           });
           currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-          lastCheckedText = "";
           setTimeout(() => renderOverlayForIframe(sourceIframeSelector), 100);
         });
 
