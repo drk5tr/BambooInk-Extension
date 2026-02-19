@@ -1,6 +1,12 @@
 import "./content-script.css";
 import type { Issue, Settings } from "../shared/types";
 
+declare global {
+  interface Window {
+    __bambooinkShadowRoots: ShadowRoot[];
+  }
+}
+
 let settings: Settings | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let currentIssues: Issue[] = [];
@@ -11,19 +17,45 @@ let shadowRoot: ShadowRoot | null = null;
 let checkGeneration = 0;
 let interactingWithOverlay = false;
 
-// --- Intercept Shadow DOM to support closed shadow roots (Salesforce LWC) ---
-const trackedShadowRoots: Set<ShadowRoot> = new Set();
-const originalAttachShadow = Element.prototype.attachShadow;
-Element.prototype.attachShadow = function (init: ShadowRootInit): ShadowRoot {
-  const shadow = originalAttachShadow.call(this, { ...init, mode: "open" as const });
-  trackedShadowRoots.add(shadow);
-  // Attach our listeners inside each shadow root
+// Shadow roots collected by shadow-hook.ts (runs at document_start)
+const listenedShadowRoots = new WeakSet<ShadowRoot>();
+
+// --- Attach listeners to a shadow root (idempotent) ---
+function attachShadowListeners(shadow: ShadowRoot): void {
+  if (listenedShadowRoots.has(shadow)) return;
+  listenedShadowRoots.add(shadow);
   shadow.addEventListener("input", handleInput, true);
   shadow.addEventListener("focusin", handleFocusIn as EventListener, true);
   shadow.addEventListener("focusout", handleFocusOut as EventListener, true);
-  console.log("[BambooInk] Attached listeners to shadow root on", this.tagName);
-  return shadow;
-};
+  console.log("[BambooInk] Attached listeners to shadow root on", shadow.host?.tagName);
+}
+
+// --- Process all shadow roots collected by the early hook ---
+function processCollectedShadowRoots(): void {
+  const roots = window.__bambooinkShadowRoots || [];
+  for (const shadow of roots) {
+    attachShadowListeners(shadow);
+  }
+}
+
+// --- Recursively walk DOM to find shadow roots (for any missed before hook loaded) ---
+function walkDOMForShadowRoots(node: Element): void {
+  if (node.shadowRoot) {
+    attachShadowListeners(node.shadowRoot);
+    // Also walk inside shadow root
+    for (const child of node.shadowRoot.querySelectorAll("*")) {
+      walkDOMForShadowRoots(child);
+    }
+  }
+  for (const child of node.querySelectorAll("*")) {
+    if (child.shadowRoot) {
+      attachShadowListeners(child.shadowRoot);
+      for (const innerChild of child.shadowRoot.querySelectorAll("*")) {
+        walkDOMForShadowRoots(innerChild);
+      }
+    }
+  }
+}
 
 // Load settings on init (retry if service worker isn't ready)
 function loadSettings(): void {
@@ -109,16 +141,13 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
     // Map normalized index back to raw index by walking char-by-char
     let rawIdx = 0;
     let normCount = 0;
-    const rawChars = [...fullText];
-    while (normCount < normalizedIdx && rawIdx < rawChars.length) {
-      // Each raw char maps to one normalized char (whitespace collapsed differently)
+    while (normCount < normalizedIdx && rawIdx < fullText.length) {
       rawIdx++;
       normCount++;
     }
     const idx = rawIdx;
 
-    // Calculate raw end by matching the length of the original in the raw text
-    // Walk from idx consuming normalized chars until we match normalizedOriginal.length
+    // Calculate raw end
     let rawEnd = idx;
     let matchedNorm = 0;
     while (matchedNorm < normalizedOriginal.length && rawEnd < fullText.length) {
@@ -187,8 +216,6 @@ function getCaretRect(): DOMRect | null {
   if (!el) return null;
 
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-    // For textareas/inputs, use element bounds as approximation
-    // (precise caret position in textarea requires a mirror div, which we can add later)
     const rect = el.getBoundingClientRect();
     return new DOMRect(rect.right - 20, rect.bottom, 0, 0);
   }
@@ -204,7 +231,6 @@ function getCaretRect(): DOMRect | null {
     return rects[rects.length - 1];
   }
 
-  // Fallback: element bounds
   return el.getBoundingClientRect();
 }
 
@@ -225,7 +251,6 @@ function ensureOverlayContainer(): { container: HTMLDivElement; shadow: ShadowRo
   // Track overlay interaction to prevent focusout from hiding it
   overlayContainer.addEventListener("mousedown", () => { interactingWithOverlay = true; });
   overlayContainer.addEventListener("mouseup", () => {
-    // Reset after a short delay so focusout check sees it
     setTimeout(() => { interactingWithOverlay = false; }, 400);
   });
 
@@ -352,7 +377,6 @@ function renderOverlay(): void {
   if (caretRect) {
     let x = caretRect.x + 10;
     let y = caretRect.y + caretRect.height + 8;
-    // Clamp to viewport
     if (x + 350 > window.innerWidth) x = window.innerWidth - 360;
     if (x < 10) x = 10;
     if (y + 300 > window.innerHeight) y = caretRect.y - 308;
@@ -364,11 +388,9 @@ function renderOverlay(): void {
   const root = document.createElement("div");
   root.className = "bambooink-root";
 
-  // Check if expanded
   const isExpanded = container.dataset.expanded === "true";
 
   if (!isExpanded) {
-    // Pill mode
     const pill = document.createElement("div");
     pill.className = "bambooink-pill";
     pill.innerHTML = `<span>${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span>`;
@@ -379,11 +401,9 @@ function renderOverlay(): void {
     });
     root.appendChild(pill);
   } else {
-    // Expanded panel
     const panel = document.createElement("div");
     panel.className = "bambooink-panel";
 
-    // Header
     const header = document.createElement("div");
     header.className = "bambooink-header";
     header.innerHTML = `<span>BambooInk - ${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span><span style="font-size:16px">&#x2715;</span>`;
@@ -394,7 +414,6 @@ function renderOverlay(): void {
     });
     panel.appendChild(header);
 
-    // Issues
     for (const issue of currentIssues) {
       const issueEl = document.createElement("div");
       issueEl.className = "bambooink-issue";
@@ -418,15 +437,13 @@ function renderOverlay(): void {
       issueEl.querySelector(".bambooink-btn-accept")?.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        // Capture element ref before any async operations
         const targetEl = activeElement;
         console.log("[BambooInk] Accept clicked, activeElement:", targetEl?.tagName, "original:", issue.original);
         if (targetEl) {
           replaceTextInElement(targetEl, issue.original, issue.suggestion);
         }
         currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-        lastCheckedText = ""; // Force re-check after fix
-        // Defer re-render so replacement completes first
+        lastCheckedText = "";
         setTimeout(() => renderOverlay(), 100);
       });
 
@@ -532,9 +549,7 @@ function handleFocusIn(e: FocusEvent): void {
 }
 
 function handleFocusOut(e: FocusEvent): void {
-  // Delay hide to allow clicking overlay buttons
   setTimeout(() => {
-    // Don't hide if user is interacting with our overlay
     if (interactingWithOverlay) return;
     hideOverlay();
     activeElement = null;
@@ -558,13 +573,25 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// --- Shadow DOM: process roots collected by early hook + scan existing DOM ---
+
+processCollectedShadowRoots();
+walkDOMForShadowRoots(document.documentElement);
+console.log("[BambooInk] Initial shadow root scan complete, tracked:", window.__bambooinkShadowRoots?.length || 0);
+
 // --- MutationObserver for SPA support (Salesforce, etc.) ---
-// Watch for dynamically added contenteditable/textarea elements and attach listeners
+// Watch for dynamically added elements, check for shadow roots and text fields
 const observer = new MutationObserver((mutations) => {
+  // Process any new shadow roots collected since last check
+  processCollectedShadowRoots();
+
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
       if (node instanceof HTMLElement) {
-        // Check the node itself and any text fields inside it
+        // Check for shadow roots on new elements
+        walkDOMForShadowRoots(node);
+
+        // Check for text fields in light DOM
         const fields = node.querySelectorAll
           ? [node, ...node.querySelectorAll("textarea, input, [contenteditable]")]
           : [node];
@@ -586,5 +613,52 @@ observer.observe(document.body, {
   childList: true,
   subtree: true,
 });
+
+// --- Polling fallback for Salesforce ---
+// Catches cases where events are swallowed by Salesforce's event handlers
+// or where shadow roots are created after our MutationObserver fires
+let lastPolledText = "";
+setInterval(() => {
+  if (!settings?.enabled || !settings?.apiKey) return;
+
+  // Process any new shadow roots
+  processCollectedShadowRoots();
+
+  // Search for focused contenteditable elements inside tracked shadow roots
+  const roots = window.__bambooinkShadowRoots || [];
+  for (const shadow of roots) {
+    try {
+      // Look for focused contenteditable inside this shadow root
+      const active = shadow.activeElement;
+      if (active instanceof HTMLElement && isTextField(active)) {
+        const text = getTextFromElement(active);
+        if (text.trim().length >= 10 && text !== lastPolledText) {
+          console.log("[BambooInk] Poller found active text field in shadow root:", active.tagName, "text length:", text.length);
+          activeElement = active;
+          lastPolledText = text;
+          scheduleCheck(text);
+          return;
+        }
+      }
+
+      // Also check for contenteditable elements that might be focused
+      const editables = shadow.querySelectorAll("[contenteditable]");
+      for (const el of editables) {
+        if (el instanceof HTMLElement && el === shadow.activeElement) {
+          const text = getTextFromElement(el);
+          if (text.trim().length >= 10 && text !== lastPolledText) {
+            console.log("[BambooInk] Poller found contenteditable in shadow root:", el.className);
+            activeElement = el;
+            lastPolledText = text;
+            scheduleCheck(text);
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      // Shadow root may have been detached
+    }
+  }
+}, 2000);
 
 console.log("[BambooInk] Content script loaded");

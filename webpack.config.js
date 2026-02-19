@@ -12,6 +12,7 @@ module.exports = (env, argv) => {
   return {
     entry: {
       "service-worker": "./src/background/service-worker.ts",
+      "shadow-hook": "./src/content/shadow-hook.ts",
       "content-script": "./src/content/content-script.ts",
       popup: "./src/popup/popup.tsx",
       options: "./src/options/options.tsx",
