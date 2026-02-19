@@ -1,6 +1,8 @@
 import "./content-script.css";
 import type { Issue, Settings } from "../shared/types";
 
+const isInIframe = window !== window.top;
+
 let settings: Settings | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let currentIssues: Issue[] = [];
@@ -10,6 +12,8 @@ let overlayContainer: HTMLDivElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
 let checkGeneration = 0;
 let interactingWithOverlay = false;
+// For iframe→top-frame overlay relay: identifies which iframe we're in
+let iframeSelector = "";
 
 // Track shadow roots we've already attached listeners to
 const listenedShadowRoots = new WeakSet<ShadowRoot>();
@@ -471,6 +475,10 @@ function hideOverlay(): void {
 // --- Main Logic ---
 
 function scheduleCheck(text: string): void {
+  if (!chrome.runtime?.sendMessage) {
+    console.log("[BambooInk] Check skipped — chrome.runtime unavailable (extension context invalidated)");
+    return;
+  }
   if (!settings?.enabled || !settings?.apiKey) {
     console.log("[BambooInk] Check skipped — enabled:", settings?.enabled, "hasKey:", !!settings?.apiKey);
     return;
@@ -505,7 +513,16 @@ function scheduleCheck(text: string): void {
         currentIssues = response.issues;
 
         if (currentIssues.length > 0) {
-          renderOverlay();
+          if (isInIframe) {
+            // Relay issues to the top frame for rendering
+            chrome.runtime.sendMessage({
+              action: "relay-overlay-to-top",
+              issues: response.issues,
+              iframeSelector: iframeSelector,
+            });
+          } else {
+            renderOverlay();
+          }
         } else {
           hideOverlay();
         }
@@ -601,20 +618,59 @@ observer.observe(document.body, {
   subtree: true,
 });
 
-// --- Polling fallback for Salesforce ---
-// Catches cases where events are swallowed by Salesforce's event handlers
-// or where shadow roots are created after our MutationObserver fires
+// --- Polling fallback for CKEditor iframes + Shadow DOM ---
+// CKEditor replaces the iframe document after content script loads,
+// destroying all event listeners. We poll to find and attach to these iframes.
 let lastPolledText = "";
+const attachedIframeDocs = new WeakSet<Document>();
+
+function attachToIframeDoc(doc: Document): void {
+  if (attachedIframeDocs.has(doc)) return;
+  attachedIframeDocs.add(doc);
+  doc.addEventListener("input", handleInput, true);
+  doc.addEventListener("focusin", handleFocusIn as EventListener, true);
+  doc.addEventListener("focusout", handleFocusOut as EventListener, true);
+  console.log("[BambooInk] Attached listeners to iframe document:", doc.title || "untitled");
+}
+
+function findCKEditorIframes(): void {
+  // Look for CKEditor iframes (class cke_wysiwyg_frame) and any contenteditable iframes
+  const iframes = document.querySelectorAll("iframe.cke_wysiwyg_frame, iframe[title*='Email'], iframe[title*='Editor']");
+  for (const iframe of iframes) {
+    try {
+      const doc = (iframe as HTMLIFrameElement).contentDocument;
+      if (doc && doc.body) {
+        attachToIframeDoc(doc);
+        // Check for text while we're here
+        if (doc.body.isContentEditable || doc.designMode === "on") {
+          const text = (doc.body.innerText || "").replace(/\u00a0/g, " ");
+          if (text.trim().length >= 10 && text !== lastPolledText) {
+            console.log("[BambooInk] Poller found CKEditor content, length:", text.trim().length);
+            activeElement = doc.body;
+            lastPolledText = text;
+            scheduleCheck(text);
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      // Cross-origin iframe, skip
+    }
+  }
+}
+
 setInterval(() => {
   if (!settings?.enabled || !settings?.apiKey) return;
 
   // Re-scan DOM for any new shadow roots (SPA navigation, lazy-loaded components)
   walkDOMForShadowRoots(document.documentElement);
 
+  // Find and attach to CKEditor iframes
+  findCKEditorIframes();
+
   // Search for focused contenteditable elements inside tracked shadow roots
   for (const shadow of knownShadowRoots) {
     try {
-      // Look for focused contenteditable inside this shadow root
       const active = shadow.activeElement;
       if (active instanceof HTMLElement && isTextField(active)) {
         const text = getTextFromElement(active);
@@ -626,28 +682,262 @@ setInterval(() => {
           return;
         }
       }
-
-      // Also check for contenteditable elements that might be focused
-      const editables = shadow.querySelectorAll("[contenteditable]");
-      for (const el of editables) {
-        if (el instanceof HTMLElement) {
-          const text = getTextFromElement(el);
-          if (text.trim().length >= 10 && text !== lastPolledText) {
-            // Check if this element or its parent has focus
-            if (el.contains(document.activeElement) || shadow.activeElement === el || document.activeElement?.contains(shadow.host)) {
-              console.log("[BambooInk] Poller found contenteditable in shadow root:", el.className || el.tagName);
-              activeElement = el;
-              lastPolledText = text;
-              scheduleCheck(text);
-              return;
-            }
-          }
-        }
-      }
     } catch (e) {
       // Shadow root may have been detached
     }
   }
 }, 2000);
+
+// --- Self-detection for CKEditor iframe ---
+// If this content script is running inside a CKEditor iframe (body is contentEditable),
+// CKEditor may replace the document after initial load via document.open()/write()/close().
+// We use a MutationObserver on <html> to re-attach listeners when the document is replaced.
+function setupCKEditorSelfDetection(): void {
+  // Check if we're inside a frame with contentEditable body
+  if (window === window.top) return; // Only in iframes
+
+  // Build an iframe selector so the top frame can find us
+  try {
+    const fe = window.frameElement;
+    if (fe) {
+      if (fe.classList.contains("cke_wysiwyg_frame")) {
+        iframeSelector = "iframe.cke_wysiwyg_frame";
+      } else if (fe.getAttribute("title")) {
+        iframeSelector = `iframe[title="${fe.getAttribute("title")}"]`;
+      } else if (fe.id) {
+        iframeSelector = `iframe#${fe.id}`;
+      } else {
+        iframeSelector = "iframe[contenteditable-body]";
+      }
+    }
+  } catch (e) {
+    // Cross-origin, can't access frameElement
+  }
+
+  // Listen for text replacement commands from the top frame
+  chrome.runtime.onMessage.addListener((message: any) => {
+    if (message.action === "replace-text-in-iframe") {
+      // Use document.body directly — activeElement may have been cleared by focusout
+      const target = activeElement || document.body;
+      if (target && (target.isContentEditable || target instanceof HTMLTextAreaElement)) {
+        console.log("[BambooInk] Iframe received replace command, target:", target.tagName);
+        replaceTextInElement(target, message.original, message.suggestion);
+        // Reset checked text so next poll picks up the change
+        lastCheckedText = "";
+        lastPolledText = "";
+      }
+    }
+  });
+
+  function checkAndAttach(): void {
+    if (document.body && (document.body.isContentEditable || document.designMode === "on")) {
+      console.log("[BambooInk] Detected contentEditable body in iframe, attaching listeners");
+      document.body.addEventListener("input", handleInput, true);
+      document.body.addEventListener("focusin", handleFocusIn as EventListener, true);
+      document.body.addEventListener("focusout", handleFocusOut as EventListener, true);
+    }
+  }
+
+  // Check immediately
+  checkAndAttach();
+
+  // Also watch for document body changes (CKEditor replaces the whole document)
+  // We observe the <html> element for child changes since <body> gets replaced
+  const htmlEl = document.documentElement;
+  if (htmlEl) {
+    const bodyObserver = new MutationObserver(() => {
+      checkAndAttach();
+    });
+    bodyObserver.observe(htmlEl, { childList: true });
+  }
+
+  // Polling fallback: CKEditor may replace the document after a delay
+  let selfPollCount = 0;
+  const selfPollInterval = setInterval(() => {
+    selfPollCount++;
+    checkAndAttach();
+
+    // Also directly check for text and trigger analysis
+    if (document.body && (document.body.isContentEditable || document.designMode === "on")) {
+      const text = (document.body.innerText || "").replace(/\u00a0/g, " ");
+      if (text.trim().length >= 10 && text !== lastPolledText) {
+        console.log("[BambooInk] CKEditor self-poll found text, length:", text.trim().length);
+        activeElement = document.body;
+        lastPolledText = text;
+        scheduleCheck(text);
+      }
+    }
+
+    // Stop polling after 60 seconds (30 checks at 2s interval)
+    if (selfPollCount > 30) {
+      clearInterval(selfPollInterval);
+    }
+  }, 2000);
+}
+
+setupCKEditorSelfDetection();
+
+// --- Top-frame: listen for overlay relay from iframes ---
+if (!isInIframe) {
+  // Track the source iframe selector for relaying Accept commands back
+  let iframeOverlaySource = "";
+
+  // Find the outermost iframe in the top document that contains the editor
+  // (walks all direct iframes and picks the one related to the email composer)
+  function findEditorIframeRect(): DOMRect | null {
+    // Look for common Salesforce/CKEditor container iframes in the top document
+    const selectors = [
+      "iframe[title*='Email']",
+      "iframe[title*='editor' i]",
+      "iframe[title*='CK']",
+      "iframe[title*='Composer']",
+      "iframe[title*='Publisher']",
+    ];
+    for (const sel of selectors) {
+      const iframe = document.querySelector(sel) as HTMLIFrameElement | null;
+      if (iframe) return iframe.getBoundingClientRect();
+    }
+    // Fallback: find the largest visible iframe (likely the main Salesforce content area)
+    let bestIframe: HTMLIFrameElement | null = null;
+    let bestArea = 0;
+    const iframes = document.querySelectorAll("iframe");
+    for (const iframe of iframes) {
+      const rect = (iframe as HTMLIFrameElement).getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area > bestArea && rect.width > 200 && rect.height > 100) {
+        bestArea = area;
+        bestIframe = iframe as HTMLIFrameElement;
+      }
+    }
+    return bestIframe ? bestIframe.getBoundingClientRect() : null;
+  }
+
+  chrome.runtime.onMessage.addListener((message: any) => {
+    if (message.action === "render-overlay-from-iframe") {
+      console.log("[BambooInk] Top frame received overlay from iframe, issues:", message.issues.length);
+      iframeOverlaySource = message.iframeSelector || "";
+      currentIssues = message.issues;
+
+      if (currentIssues.length > 0) {
+        const { container } = ensureOverlayContainer();
+
+        // Position near the editor iframe in the top document
+        const iframeRect = findEditorIframeRect();
+        if (iframeRect) {
+          // Bottom-right corner of the iframe, inside the visible area
+          let x = iframeRect.right - 360;
+          let y = iframeRect.bottom - 80;
+          if (x < iframeRect.left) x = iframeRect.left + 10;
+          if (x < 10) x = 10;
+          if (y + 200 > window.innerHeight) y = iframeRect.top + 10;
+          if (y < 10) y = 10;
+          container.style.left = `${x}px`;
+          container.style.top = `${y}px`;
+        } else {
+          // No iframe found — position bottom-right of viewport
+          container.style.right = "20px";
+          container.style.bottom = "20px";
+          container.style.left = "auto";
+          container.style.top = "auto";
+        }
+
+        renderOverlayForIframe(iframeOverlaySource);
+      } else {
+        hideOverlay();
+      }
+    }
+  });
+
+  function renderOverlayForIframe(sourceIframeSelector: string): void {
+    const { container, shadow } = ensureOverlayContainer();
+
+    const oldPanel = shadow.querySelector(".bambooink-root");
+    if (oldPanel) oldPanel.remove();
+
+    if (currentIssues.length === 0) {
+      container.style.display = "none";
+      return;
+    }
+
+    container.style.display = "block";
+
+    const root = document.createElement("div");
+    root.className = "bambooink-root";
+
+    const isExpanded = container.dataset.expanded === "true";
+
+    if (!isExpanded) {
+      const pill = document.createElement("div");
+      pill.className = "bambooink-pill";
+      pill.innerHTML = `<span>${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span>`;
+      pill.addEventListener("click", (e) => {
+        e.stopPropagation();
+        container.dataset.expanded = "true";
+        renderOverlayForIframe(sourceIframeSelector);
+      });
+      root.appendChild(pill);
+    } else {
+      const panel = document.createElement("div");
+      panel.className = "bambooink-panel";
+
+      const header = document.createElement("div");
+      header.className = "bambooink-header";
+      header.innerHTML = `<span>BambooInk - ${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span><span style="font-size:16px">&#x2715;</span>`;
+      header.addEventListener("click", (e) => {
+        e.stopPropagation();
+        container.dataset.expanded = "false";
+        renderOverlayForIframe(sourceIframeSelector);
+      });
+      panel.appendChild(header);
+
+      for (const issue of currentIssues) {
+        const issueEl = document.createElement("div");
+        issueEl.className = "bambooink-issue";
+
+        const typeClass = `type-${issue.type}`;
+        issueEl.innerHTML = `
+          <span class="bambooink-issue-type ${typeClass}">${escapeHtml(issue.label)}</span>
+          <div>
+            <span class="bambooink-original">${escapeHtml(issue.original)}</span>
+            <span class="bambooink-arrow">&rarr;</span>
+            <span class="bambooink-suggestion">${escapeHtml(issue.suggestion)}</span>
+          </div>
+          <div class="bambooink-explanation">${escapeHtml(issue.explanation)}</div>
+          <div class="bambooink-actions">
+            <button class="bambooink-btn bambooink-btn-accept" data-issue-id="${issue.id}">Accept</button>
+            <button class="bambooink-btn bambooink-btn-dismiss" data-issue-id="${issue.id}">Dismiss</button>
+          </div>
+        `;
+
+        // Accept: relay replacement to the iframe
+        issueEl.querySelector(".bambooink-btn-accept")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          // Send replacement command to all frames — the iframe with the active element will handle it
+          chrome.runtime.sendMessage({
+            action: "relay-replace-to-iframe",
+            original: issue.original,
+            suggestion: issue.suggestion,
+          });
+          currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+          lastCheckedText = "";
+          setTimeout(() => renderOverlayForIframe(sourceIframeSelector), 100);
+        });
+
+        issueEl.querySelector(".bambooink-btn-dismiss")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+          renderOverlayForIframe(sourceIframeSelector);
+        });
+
+        panel.appendChild(issueEl);
+      }
+
+      root.appendChild(panel);
+    }
+
+    shadow.appendChild(root);
+  }
+}
 
 console.log("[BambooInk] Content script loaded");

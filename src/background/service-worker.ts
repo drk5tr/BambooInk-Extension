@@ -19,6 +19,33 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Handle messages from content scripts and popup/options
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   switch (message.action) {
+    case "relay-overlay-to-top": {
+      // Forward overlay data from iframe content script to the top frame
+      const tabId = _sender.tab?.id;
+      if (tabId != null) {
+        chrome.tabs.sendMessage(tabId, {
+          action: "render-overlay-from-iframe",
+          issues: (message as any).issues,
+          iframeSelector: (message as any).iframeSelector,
+        }, { frameId: 0 });
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    case "relay-replace-to-iframe": {
+      // Broadcast replacement command to all frames in the tab
+      const replaceTabId = _sender.tab?.id;
+      if (replaceTabId != null) {
+        chrome.tabs.sendMessage(replaceTabId, {
+          action: "replace-text-in-iframe",
+          original: (message as any).original,
+          suggestion: (message as any).suggestion,
+        });
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
     case "check-text": {
       runAiCheck(message.text, message.tone, message.goals).then((result) => {
         sendResponse({ issues: result.issues });

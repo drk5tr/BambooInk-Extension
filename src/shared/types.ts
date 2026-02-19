@@ -88,9 +88,30 @@ export interface RemoveDictionaryWordMessage {
   word: string;
 }
 
+export interface RelayOverlayMessage {
+  action: "relay-overlay-to-top";
+  issues: Issue[];
+  iframeSelector: string;
+}
+
+export interface RenderOverlayFromIframeMessage {
+  action: "render-overlay-from-iframe";
+  issues: Issue[];
+  iframeSelector: string;
+}
+
+export interface RelayReplaceToIframeMessage {
+  action: "relay-replace-to-iframe";
+  original: string;
+  suggestion: string;
+}
+
 export type ExtensionMessage =
   | CheckTextMessage
   | GetSettingsMessage
   | UpdateSettingsMessage
   | AddDictionaryWordMessage
-  | RemoveDictionaryWordMessage;
+  | RemoveDictionaryWordMessage
+  | RelayOverlayMessage
+  | RenderOverlayFromIframeMessage
+  | RelayReplaceToIframeMessage;
