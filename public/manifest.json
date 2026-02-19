@@ -13,6 +13,7 @@
       "matches": ["<all_urls>"],
       "js": ["shadow-hook.js"],
       "run_at": "document_start",
+      "world": "MAIN",
       "all_frames": true,
       "match_about_blank": true
     },
