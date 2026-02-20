@@ -32,7 +32,7 @@
   "options_page": "options.html",
   "web_accessible_resources": [
     {
-      "resources": ["shadow-hook-main.js"],
+      "resources": ["shadow-hook-main.js", "dictionaries/*"],
       "matches": ["<all_urls>"]
     }
   ],

@@ -19,15 +19,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Handle messages from content scripts and popup/options
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   switch (message.action) {
-    case "relay-overlay-to-top": {
-      // Forward overlay data from iframe content script to the top frame
+    case "relay-icon-to-top": {
+      // Forward icon/issues data from iframe content script to the top frame
       const tabId = _sender.tab?.id;
       if (tabId != null) {
         chrome.tabs.sendMessage(tabId, {
-          action: "render-overlay-from-iframe",
+          action: "render-icon-from-iframe",
           issues: (message as any).issues,
           iframeSelector: (message as any).iframeSelector,
           caretRect: (message as any).caretRect,
+          isAiLoading: (message as any).isAiLoading,
+          isAiComplete: (message as any).isAiComplete,
         }, { frameId: 0 });
       }
       sendResponse({ ok: true });
@@ -42,6 +44,18 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
           action: "replace-text-in-iframe",
           original: (message as any).original,
           suggestion: (message as any).suggestion,
+        });
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    case "relay-enhance-to-iframe": {
+      // Tell iframe to run AI enhancement
+      const enhanceTabId = _sender.tab?.id;
+      if (enhanceTabId != null) {
+        chrome.tabs.sendMessage(enhanceTabId, {
+          action: "enhance-from-top",
         });
       }
       sendResponse({ ok: true });

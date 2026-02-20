@@ -1,5 +1,11 @@
 import "./content-script.css";
 import type { Issue, Settings } from "../shared/types";
+import { runLocalCheck } from "./checking/local-checker";
+import { mergeResults } from "../shared/engine/merge";
+import { SHADOW_STYLES } from "./ui/styles";
+import { renderIcon, repositionIcon, hideIcon } from "./ui/floating-icon";
+import { renderPanel, hidePanel } from "./ui/suggestions-panel";
+import type { PanelState } from "./ui/suggestions-panel";
 
 const isInIframe = window !== window.top;
 
@@ -10,14 +16,16 @@ let lastCheckedText = "";
 let activeElement: HTMLElement | null = null;
 let overlayContainer: HTMLDivElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
-let checkGeneration = 0;
 let interactingWithOverlay = false;
-// For iframe→top-frame overlay relay: identifies which iframe we're in
+let isAiLoading = false;
+let isAiComplete = false;
+let panelOpen = false;
+
+// For iframe→top-frame relay
 let iframeSelector = "";
 
 // Track shadow roots we've already attached listeners to
 const listenedShadowRoots = new WeakSet<ShadowRoot>();
-// Keep a strong reference list for polling
 const knownShadowRoots: ShadowRoot[] = [];
 
 // --- Attach listeners to a shadow root (idempotent) ---
@@ -30,7 +38,6 @@ function attachShadowListeners(shadow: ShadowRoot): void {
   shadow.addEventListener("focusout", handleFocusOut as EventListener, true);
   console.log("[BambooInk] Attached listeners to shadow root on", shadow.host?.tagName);
 
-  // Also observe mutations inside this shadow root
   const shadowObserver = new MutationObserver(() => {
     walkDOMForShadowRoots(shadow);
   });
@@ -46,7 +53,6 @@ function walkDOMForShadowRoots(root: ShadowRoot | Element): void {
       walkDOMForShadowRoots(el.shadowRoot);
     }
   }
-  // Check root itself if it's an element
   if (root instanceof Element && root.shadowRoot) {
     attachShadowListeners(root.shadowRoot);
   }
@@ -61,12 +67,11 @@ function loadSettings(): void {
       return;
     }
     settings = s;
-    console.log("[BambooInk] Settings loaded, enabled:", s?.enabled, "hasKey:", !!s?.apiKey);
+    console.log("[BambooInk] Settings loaded, enabled:", s?.enabled);
   });
 }
 loadSettings();
 
-// Listen for settings changes
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync") {
     loadSettings();
@@ -90,7 +95,6 @@ function getTextFromElement(el: HTMLElement): string {
     return el.value;
   }
   if (el.isContentEditable) {
-    // Normalize non-breaking spaces so AI sees same text we'll match against
     return (el.innerText || el.textContent || "").replace(/\u00a0/g, " ");
   }
   return "";
@@ -105,13 +109,10 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
       console.log("[BambooInk] Original text not found in value");
       return;
     }
-    // Direct value replacement — most reliable approach
     el.value = el.value.substring(0, start) + suggestion + el.value.substring(start + original.length);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    console.log("[BambooInk] Replaced in textarea/input via direct value set");
   } else if (el.isContentEditable) {
-    // Build a map of all text nodes and their positions in the full text
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     const textNodes: { node: Text; start: number }[] = [];
     let fullText = "";
@@ -121,19 +122,16 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
       fullText += tNode.textContent || "";
     }
 
-    // Normalize whitespace: email editors use non-breaking spaces (\u00a0)
     const normalize = (s: string) => s.replace(/[\u00a0\u200b\u200c\u200d\ufeff]/g, " ").replace(/\s+/g, " ");
     const normalizedFull = normalize(fullText);
     const normalizedOriginal = normalize(original);
 
-    // Search in normalized text, but map position back to raw text
     const normalizedIdx = normalizedFull.indexOf(normalizedOriginal);
     if (normalizedIdx === -1) {
-      console.log("[BambooInk] Original text not found in contenteditable. Full text:", JSON.stringify(fullText), "Searching for:", JSON.stringify(original));
+      console.log("[BambooInk] Original text not found in contenteditable");
       return;
     }
 
-    // Map normalized index back to raw index by walking char-by-char
     let rawIdx = 0;
     let normCount = 0;
     while (normCount < normalizedIdx && rawIdx < fullText.length) {
@@ -142,16 +140,13 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
     }
     const idx = rawIdx;
 
-    // Calculate raw end
     let rawEnd = idx;
     let matchedNorm = 0;
     while (matchedNorm < normalizedOriginal.length && rawEnd < fullText.length) {
       rawEnd++;
       matchedNorm++;
     }
-    console.log("[BambooInk] Found match at raw idx:", idx, "rawEnd:", rawEnd, "in fullText length:", fullText.length);
 
-    // Find the start and end text nodes that the match spans
     const matchEnd = rawEnd;
     let startNode: Text | null = null;
     let startOffset = 0;
@@ -177,7 +172,6 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
       return;
     }
 
-    // Try execCommand first for undo support
     el.focus();
     const sel = window.getSelection();
     if (sel) {
@@ -187,12 +181,11 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
       sel.removeAllRanges();
       sel.addRange(range);
       if (document.execCommand("insertText", false, suggestion)) {
-        console.log("[BambooInk] Replaced in contenteditable via execCommand");
         return;
       }
     }
 
-    // Fallback: delete the range and insert text
+    // Fallback: range manipulation
     const range = document.createRange();
     range.setStart(startNode, startOffset);
     range.setEnd(endNode, endOffset);
@@ -200,7 +193,6 @@ function replaceTextInElement(el: HTMLElement, original: string, suggestion: str
     const textNode = document.createTextNode(suggestion);
     range.insertNode(textNode);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-    console.log("[BambooInk] Replaced in contenteditable via range manipulation");
   }
 }
 
@@ -215,7 +207,6 @@ function getCaretRect(): DOMRect | null {
     return new DOMRect(rect.right - 20, rect.bottom, 0, 0);
   }
 
-  // For contenteditable, use selection API
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0).cloneRange();
@@ -229,313 +220,6 @@ function getCaretRect(): DOMRect | null {
   return el.getBoundingClientRect();
 }
 
-// --- Overlay UI ---
-
-function ensureOverlayContainer(): { container: HTMLDivElement; shadow: ShadowRoot } {
-  if (overlayContainer && shadowRoot) {
-    return { container: overlayContainer, shadow: shadowRoot };
-  }
-
-  overlayContainer = document.createElement("div");
-  overlayContainer.id = "bambooink-overlay";
-  overlayContainer.style.cssText = "position: fixed; z-index: 2147483647; pointer-events: none;";
-  document.body.appendChild(overlayContainer);
-
-  shadowRoot = overlayContainer.attachShadow({ mode: "open" });
-
-  // Track overlay interaction to prevent focusout from hiding it
-  overlayContainer.addEventListener("mousedown", () => { interactingWithOverlay = true; });
-  overlayContainer.addEventListener("mouseup", () => {
-    setTimeout(() => { interactingWithOverlay = false; }, 400);
-  });
-
-  // Inject styles into shadow DOM
-  const style = document.createElement("style");
-  style.textContent = `
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    .bambooink-panel {
-      pointer-events: auto;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1);
-      overflow: hidden;
-      max-width: 340px;
-      border: 1px solid #e5e7eb;
-    }
-    .bambooink-pill {
-      pointer-events: auto;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
-      background: #15803D;
-      color: white;
-      font-size: 12px;
-      font-weight: 600;
-      border-radius: 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      user-select: none;
-      white-space: nowrap;
-    }
-    .bambooink-pill:hover { background: #16A34A; }
-    .bambooink-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 14px;
-      background: #15803D;
-      color: white;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .bambooink-issue {
-      padding: 10px 14px;
-      border-bottom: 1px solid #f3f4f6;
-    }
-    .bambooink-issue:last-child { border-bottom: none; }
-    .bambooink-issue-type {
-      display: inline-block;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 2px 6px;
-      border-radius: 4px;
-      margin-bottom: 4px;
-    }
-    .type-spelling { background: #FEE2E2; color: #DC2626; }
-    .type-grammar { background: #FEF3C7; color: #D97706; }
-    .type-tone { background: #E0E7FF; color: #4F46E5; }
-    .type-clarity { background: #E0F2FE; color: #0284C7; }
-    .bambooink-original {
-      text-decoration: line-through;
-      color: #9ca3af;
-      font-size: 13px;
-    }
-    .bambooink-arrow { color: #9ca3af; margin: 0 4px; font-size: 12px; }
-    .bambooink-suggestion {
-      color: #15803D;
-      font-weight: 600;
-      font-size: 13px;
-    }
-    .bambooink-explanation {
-      font-size: 11px;
-      color: #6b7280;
-      margin-top: 4px;
-    }
-    .bambooink-actions {
-      display: flex;
-      gap: 6px;
-      margin-top: 6px;
-    }
-    .bambooink-btn {
-      font-size: 11px;
-      padding: 3px 10px;
-      border-radius: 4px;
-      border: none;
-      cursor: pointer;
-      font-weight: 500;
-    }
-    .bambooink-btn-accept {
-      background: #15803D;
-      color: white;
-    }
-    .bambooink-btn-accept:hover { background: #16A34A; }
-    .bambooink-btn-dismiss {
-      background: #f3f4f6;
-      color: #6b7280;
-    }
-    .bambooink-btn-dismiss:hover { background: #e5e7eb; }
-  `;
-  shadowRoot.appendChild(style);
-
-  return { container: overlayContainer, shadow: shadowRoot };
-}
-
-function renderOverlay(): void {
-  const { container, shadow } = ensureOverlayContainer();
-
-  // Remove old content (keep style)
-  const oldPanel = shadow.querySelector(".bambooink-root");
-  if (oldPanel) oldPanel.remove();
-
-  if (currentIssues.length === 0) {
-    container.style.display = "none";
-    return;
-  }
-
-  container.style.display = "block";
-
-  // Position near caret
-  const caretRect = getCaretRect();
-  if (caretRect) {
-    let x = caretRect.x + 10;
-    let y = caretRect.y + caretRect.height + 8;
-    if (x + 350 > window.innerWidth) x = window.innerWidth - 360;
-    if (x < 10) x = 10;
-    if (y + 300 > window.innerHeight) y = caretRect.y - 308;
-    if (y < 10) y = 10;
-    container.style.left = `${x}px`;
-    container.style.top = `${y}px`;
-  }
-
-  const root = document.createElement("div");
-  root.className = "bambooink-root";
-
-  const isExpanded = container.dataset.expanded === "true";
-
-  if (!isExpanded) {
-    const pill = document.createElement("div");
-    pill.className = "bambooink-pill";
-    pill.innerHTML = `<span>${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span>`;
-    pill.addEventListener("click", (e) => {
-      e.stopPropagation();
-      container.dataset.expanded = "true";
-      renderOverlay();
-    });
-    root.appendChild(pill);
-  } else {
-    const panel = document.createElement("div");
-    panel.className = "bambooink-panel";
-
-    const header = document.createElement("div");
-    header.className = "bambooink-header";
-    header.innerHTML = `<span>BambooInk - ${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span><span style="font-size:16px">&#x2715;</span>`;
-    header.addEventListener("click", (e) => {
-      e.stopPropagation();
-      container.dataset.expanded = "false";
-      renderOverlay();
-    });
-    panel.appendChild(header);
-
-    for (const issue of currentIssues) {
-      const issueEl = document.createElement("div");
-      issueEl.className = "bambooink-issue";
-
-      const typeClass = `type-${issue.type}`;
-      issueEl.innerHTML = `
-        <span class="bambooink-issue-type ${typeClass}">${issue.label}</span>
-        <div>
-          <span class="bambooink-original">${escapeHtml(issue.original)}</span>
-          <span class="bambooink-arrow">&rarr;</span>
-          <span class="bambooink-suggestion">${escapeHtml(issue.suggestion)}</span>
-        </div>
-        <div class="bambooink-explanation">${escapeHtml(issue.explanation)}</div>
-        <div class="bambooink-actions">
-          <button class="bambooink-btn bambooink-btn-accept" data-issue-id="${issue.id}">Accept</button>
-          <button class="bambooink-btn bambooink-btn-dismiss" data-issue-id="${issue.id}">Dismiss</button>
-        </div>
-      `;
-
-      // Accept handler
-      issueEl.querySelector(".bambooink-btn-accept")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const targetEl = activeElement;
-        console.log("[BambooInk] Accept clicked, activeElement:", targetEl?.tagName, "original:", issue.original);
-        if (targetEl) {
-          replaceTextInElement(targetEl, issue.original, issue.suggestion);
-          // Update lastCheckedText to post-replacement text so we don't re-trigger
-          setTimeout(() => {
-            lastCheckedText = getTextFromElement(targetEl).trim();
-          }, 250);
-        }
-        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-        setTimeout(() => renderOverlay(), 100);
-      });
-
-      // Dismiss handler
-      issueEl.querySelector(".bambooink-btn-dismiss")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-        renderOverlay();
-      });
-
-      panel.appendChild(issueEl);
-    }
-
-    root.appendChild(panel);
-  }
-
-  shadow.appendChild(root);
-}
-
-function escapeHtml(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-function hideOverlay(): void {
-  if (overlayContainer) {
-    overlayContainer.style.display = "none";
-    overlayContainer.dataset.expanded = "false";
-  }
-  currentIssues = [];
-}
-
-// --- Main Logic ---
-
-function scheduleCheck(text: string): void {
-  if (!chrome.runtime?.sendMessage) {
-    console.log("[BambooInk] Check skipped — chrome.runtime unavailable (extension context invalidated)");
-    return;
-  }
-  if (!settings?.enabled || !settings?.apiKey) {
-    console.log("[BambooInk] Check skipped — enabled:", settings?.enabled, "hasKey:", !!settings?.apiKey);
-    return;
-  }
-
-  const trimmed = text.trim();
-  if (trimmed.length < 10) {
-    hideOverlay();
-    return;
-  }
-
-  if (trimmed === lastCheckedText) return;
-
-  if (debounceTimer) clearTimeout(debounceTimer);
-
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    const thisGeneration = ++checkGeneration;
-
-    console.log("[BambooInk] Sending check for", trimmed.length, "chars");
-    chrome.runtime.sendMessage(
-      { action: "check-text", text: trimmed, tone: settings!.tone, goals: settings!.goals },
-      (response: { issues: Issue[] } | undefined) => {
-        if (chrome.runtime.lastError) {
-          console.error("[BambooInk] Check failed:", chrome.runtime.lastError.message);
-          return;
-        }
-        if (thisGeneration !== checkGeneration) return;
-        if (!response) { console.log("[BambooInk] No response from service worker"); return; }
-
-        lastCheckedText = trimmed;
-        currentIssues = response.issues;
-
-        if (currentIssues.length > 0) {
-          if (isInIframe) {
-            // Relay issues to the top frame for rendering, with caret position
-            chrome.runtime.sendMessage({
-              action: "relay-overlay-to-top",
-              issues: response.issues,
-              iframeSelector: iframeSelector,
-              caretRect: getCaretRectForTopFrame(),
-            });
-          } else {
-            renderOverlay();
-          }
-        } else {
-          hideOverlay();
-        }
-      }
-    );
-  }, settings.debounceMs || 800);
-}
-
-// Get caret rect translated to the top frame's coordinate space
 function getCaretRectForTopFrame(): { x: number; y: number; width: number; height: number } | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return null;
@@ -552,7 +236,6 @@ function getCaretRectForTopFrame(): { x: number; y: number; width: number; heigh
   }
   if (!rect) return null;
 
-  // Walk up the iframe chain, adding each frame's offset
   let win: Window = window;
   while (win !== win.top) {
     try {
@@ -563,7 +246,7 @@ function getCaretRectForTopFrame(): { x: number; y: number; width: number; heigh
       rect.y += feRect.y;
       win = win.parent;
     } catch (e) {
-      break; // Cross-origin, can't walk further
+      break;
     }
   }
   return rect;
@@ -576,12 +259,225 @@ function getRealTarget(e: Event): HTMLElement | null {
   return el || null;
 }
 
+// --- Shadow DOM Overlay Container ---
+
+function ensureOverlayContainer(): { container: HTMLDivElement; shadow: ShadowRoot } {
+  if (overlayContainer && shadowRoot) {
+    return { container: overlayContainer, shadow: shadowRoot };
+  }
+
+  overlayContainer = document.createElement("div");
+  overlayContainer.id = "bambooink-overlay";
+  overlayContainer.style.cssText = "position: fixed; z-index: 2147483647; pointer-events: none; top: 0; left: 0; width: 0; height: 0;";
+  document.body.appendChild(overlayContainer);
+
+  shadowRoot = overlayContainer.attachShadow({ mode: "open" });
+
+  // Track overlay interaction to prevent focusout from hiding it
+  overlayContainer.addEventListener("mousedown", () => { interactingWithOverlay = true; });
+  overlayContainer.addEventListener("mouseup", () => {
+    setTimeout(() => { interactingWithOverlay = false; }, 400);
+  });
+
+  const style = document.createElement("style");
+  style.textContent = SHADOW_STYLES;
+  shadowRoot.appendChild(style);
+
+  return { container: overlayContainer, shadow: shadowRoot };
+}
+
+// --- Local Check ---
+
+async function scheduleLocalCheck(text: string): Promise<void> {
+  if (!settings?.enabled) return;
+
+  const trimmed = text.trim();
+  if (trimmed.length < 10) {
+    currentIssues = [];
+    updateUI();
+    return;
+  }
+
+  if (trimmed === lastCheckedText) return;
+
+  if (debounceTimer) clearTimeout(debounceTimer);
+
+  debounceTimer = setTimeout(async () => {
+    debounceTimer = null;
+
+    try {
+      const localIssues = await runLocalCheck(trimmed, settings?.customDictionary || []);
+      lastCheckedText = trimmed;
+
+      // Keep any existing AI issues, merge with new local issues
+      const aiIssues = currentIssues.filter((i) => i.tier === "ai");
+      if (aiIssues.length > 0) {
+        currentIssues = mergeResults(
+          { tier: "local", issues: localIssues, latency: 0 },
+          { tier: "ai", issues: aiIssues, latency: 0 }
+        );
+      } else {
+        currentIssues = localIssues;
+      }
+
+      if (isInIframe) {
+        relayIconToTop();
+      } else {
+        updateUI();
+      }
+    } catch (err) {
+      console.error("[BambooInk] Local check error:", err);
+    }
+  }, 300);
+}
+
+// --- AI Enhancement (on-demand) ---
+
+function enhanceWithAI(): void {
+  if (!settings?.apiKey || !activeElement || isAiLoading) return;
+
+  const text = getTextFromElement(activeElement).trim();
+  if (text.length < 10) return;
+
+  isAiLoading = true;
+  isAiComplete = false;
+  updateUI();
+
+  chrome.runtime.sendMessage(
+    { action: "check-text", text, tone: settings.tone, goals: settings.goals },
+    (response: { issues: Issue[] } | undefined) => {
+      isAiLoading = false;
+
+      if (chrome.runtime.lastError) {
+        console.error("[BambooInk] AI check failed:", chrome.runtime.lastError.message);
+        updateUI();
+        return;
+      }
+
+      if (!response) {
+        updateUI();
+        return;
+      }
+
+      isAiComplete = true;
+
+      // Merge AI issues with existing local issues
+      const localIssues = currentIssues.filter((i) => i.tier === "local");
+      currentIssues = mergeResults(
+        { tier: "local", issues: localIssues, latency: 0 },
+        { tier: "ai", issues: response.issues, latency: 0 }
+      );
+
+      if (isInIframe) {
+        relayIconToTop();
+      } else {
+        updateUI();
+      }
+    }
+  );
+}
+
+// --- UI Rendering ---
+
+function updateUI(): void {
+  const { shadow } = ensureOverlayContainer();
+
+  const caretRect = getCaretRect();
+  if (!caretRect && !activeElement) {
+    hideIcon(shadow);
+    hidePanel(shadow);
+    return;
+  }
+
+  // Position icon just below the caret
+  const iconX = caretRect ? caretRect.x + 10 : 100;
+  const iconY = caretRect ? caretRect.y + caretRect.height + 8 : 100;
+
+  renderIcon(
+    shadow,
+    { issueCount: currentIssues.length, isLoading: isAiLoading },
+    iconX,
+    iconY,
+    () => {
+      panelOpen = !panelOpen;
+      updateUI();
+    }
+  );
+
+  if (panelOpen) {
+    const panelX = iconX;
+    const panelY = iconY + 36;
+
+    const panelState: PanelState = {
+      issues: currentIssues,
+      isAiLoading,
+      isAiComplete,
+    };
+
+    renderPanel(shadow, panelState, panelX, panelY, {
+      onAccept: (issue: Issue) => {
+        const targetEl = activeElement;
+        if (targetEl) {
+          replaceTextInElement(targetEl, issue.original, issue.suggestion);
+          setTimeout(() => {
+            if (targetEl) {
+              lastCheckedText = getTextFromElement(targetEl).trim();
+            }
+          }, 250);
+        }
+        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+        updateUI();
+      },
+      onDismiss: (issue: Issue) => {
+        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+        updateUI();
+      },
+      onEnhance: () => {
+        enhanceWithAI();
+      },
+      onClose: () => {
+        panelOpen = false;
+        updateUI();
+      },
+    });
+  } else {
+    hidePanel(shadow);
+  }
+}
+
+function hideUI(): void {
+  if (shadowRoot) {
+    hideIcon(shadowRoot);
+    hidePanel(shadowRoot);
+  }
+  currentIssues = [];
+  panelOpen = false;
+  isAiComplete = false;
+  isAiLoading = false;
+}
+
+// --- Iframe Relay ---
+
+function relayIconToTop(): void {
+  if (!chrome.runtime?.sendMessage) return;
+  chrome.runtime.sendMessage({
+    action: "relay-icon-to-top",
+    issues: currentIssues,
+    iframeSelector: iframeSelector,
+    caretRect: getCaretRectForTopFrame(),
+    isAiLoading,
+    isAiComplete,
+  });
+}
+
+// --- Event Handlers ---
+
 function handleInput(e: Event): void {
   const el = getRealTarget(e);
   if (!el || !isTextField(el)) return;
   activeElement = el;
   const text = getTextFromElement(el);
-  scheduleCheck(text);
+  scheduleLocalCheck(text);
 }
 
 function handleFocusIn(e: FocusEvent): void {
@@ -590,14 +486,17 @@ function handleFocusIn(e: FocusEvent): void {
   activeElement = el;
   const text = getTextFromElement(el);
   if (text.trim().length >= 10) {
-    scheduleCheck(text);
+    scheduleLocalCheck(text);
+  } else {
+    // Show icon even with no text
+    updateUI();
   }
 }
 
 function handleFocusOut(e: FocusEvent): void {
   setTimeout(() => {
     if (interactingWithOverlay) return;
-    hideOverlay();
+    hideUI();
     activeElement = null;
     lastCheckedText = "";
   }, 300);
@@ -609,13 +508,27 @@ document.addEventListener("input", handleInput, true);
 document.addEventListener("focusin", handleFocusIn, true);
 document.addEventListener("focusout", handleFocusOut, true);
 
-// Handle clicks outside overlay to close it
+// Close panel on click outside
 document.addEventListener("click", (e) => {
-  if (overlayContainer && overlayContainer.dataset.expanded === "true") {
-    if (!overlayContainer.contains(e.target as Node)) {
-      overlayContainer.dataset.expanded = "false";
-      renderOverlay();
+  if (panelOpen && overlayContainer && !overlayContainer.contains(e.target as Node)) {
+    panelOpen = false;
+    updateUI();
+  }
+});
+
+// Reposition icon on scroll/resize
+window.addEventListener("scroll", () => {
+  if (activeElement && shadowRoot) {
+    const caretRect = getCaretRect();
+    if (caretRect) {
+      repositionIcon(shadowRoot, caretRect.x + 10, caretRect.y + caretRect.height + 8);
     }
+  }
+}, true);
+
+window.addEventListener("resize", () => {
+  if (activeElement) {
+    updateUI();
   }
 });
 
@@ -624,16 +537,13 @@ document.addEventListener("click", (e) => {
 walkDOMForShadowRoots(document.documentElement);
 console.log("[BambooInk] Initial shadow root scan complete, tracked:", knownShadowRoots.length);
 
-// --- MutationObserver for SPA support (Salesforce, etc.) ---
-// Watch for dynamically added elements, check for shadow roots and text fields
+// --- MutationObserver for SPA support ---
 const observer = new MutationObserver((mutations) => {
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
       if (node instanceof HTMLElement) {
-        // Check for shadow roots on new elements
         walkDOMForShadowRoots(node);
 
-        // Check for text fields in light DOM
         const fields = node.querySelectorAll
           ? [node, ...node.querySelectorAll("textarea, input, [contenteditable]")]
           : [node];
@@ -642,7 +552,7 @@ const observer = new MutationObserver((mutations) => {
             activeElement = field;
             const text = getTextFromElement(field);
             if (text.trim().length >= 10) {
-              scheduleCheck(text);
+              scheduleLocalCheck(text);
             }
           }
         }
@@ -660,22 +570,19 @@ observer.observe(document.body, {
 let lastPolledText = "";
 
 setInterval(() => {
-  if (!settings?.enabled || !settings?.apiKey) return;
+  if (!settings?.enabled) return;
 
-  // Re-scan DOM for any new shadow roots (SPA navigation, lazy-loaded components)
   walkDOMForShadowRoots(document.documentElement);
 
-  // Search for focused contenteditable elements inside tracked shadow roots
   for (const shadow of knownShadowRoots) {
     try {
       const active = shadow.activeElement;
       if (active instanceof HTMLElement && isTextField(active)) {
         const text = getTextFromElement(active);
         if (text.trim().length >= 10 && text !== lastPolledText) {
-          console.log("[BambooInk] Poller found active text field in shadow root:", active.tagName, "text length:", text.length);
           activeElement = active;
           lastPolledText = text;
-          scheduleCheck(text);
+          scheduleLocalCheck(text);
           return;
         }
       }
@@ -686,14 +593,9 @@ setInterval(() => {
 }, 2000);
 
 // --- Self-detection for CKEditor iframe ---
-// If this content script is running inside a CKEditor iframe (body is contentEditable),
-// CKEditor may replace the document after initial load via document.open()/write()/close().
-// We use a MutationObserver on <html> to re-attach listeners when the document is replaced.
 function setupCKEditorSelfDetection(): void {
-  // Check if we're inside a frame with contentEditable body
-  if (window === window.top) return; // Only in iframes
+  if (window === window.top) return;
 
-  // Build an iframe selector so the top frame can find us
   try {
     const fe = window.frameElement;
     if (fe) {
@@ -708,25 +610,24 @@ function setupCKEditorSelfDetection(): void {
       }
     }
   } catch (e) {
-    // Cross-origin, can't access frameElement
+    // Cross-origin
   }
 
   // Listen for text replacement commands from the top frame
   chrome.runtime.onMessage.addListener((message: any) => {
     if (message.action === "replace-text-in-iframe") {
-      // Use document.body directly — activeElement may have been cleared by focusout
       const target = activeElement || document.body;
       if (target && (target.isContentEditable || target instanceof HTMLTextAreaElement)) {
-        console.log("[BambooInk] Iframe received replace command, target:", target.tagName);
         replaceTextInElement(target, message.original, message.suggestion);
-        // Set lastPolledText to post-replacement text so poller doesn't re-trigger
-        // until user actually types something new
         setTimeout(() => {
           const newText = (document.body.innerText || "").replace(/\u00a0/g, " ");
           lastPolledText = newText;
           lastCheckedText = newText.trim();
         }, 250);
       }
+    }
+    if (message.action === "enhance-from-top") {
+      enhanceWithAI();
     }
   });
 
@@ -739,11 +640,8 @@ function setupCKEditorSelfDetection(): void {
     }
   }
 
-  // Check immediately
   checkAndAttach();
 
-  // Also watch for document body changes (CKEditor replaces the whole document)
-  // We observe the <html> element for child changes since <body> gets replaced
   const htmlEl = document.documentElement;
   if (htmlEl) {
     const bodyObserver = new MutationObserver(() => {
@@ -752,24 +650,20 @@ function setupCKEditorSelfDetection(): void {
     bodyObserver.observe(htmlEl, { childList: true });
   }
 
-  // Polling fallback: CKEditor may replace the document after a delay
   let selfPollCount = 0;
   const selfPollInterval = setInterval(() => {
     selfPollCount++;
     checkAndAttach();
 
-    // Also directly check for text and trigger analysis
     if (document.body && (document.body.isContentEditable || document.designMode === "on")) {
       const text = (document.body.innerText || "").replace(/\u00a0/g, " ");
       if (text.trim().length >= 10 && text !== lastPolledText) {
-        console.log("[BambooInk] CKEditor self-poll found text, length:", text.trim().length);
         activeElement = document.body;
         lastPolledText = text;
-        scheduleCheck(text);
+        scheduleLocalCheck(text);
       }
     }
 
-    // Stop polling after 60 seconds (30 checks at 2s interval)
     if (selfPollCount > 30) {
       clearInterval(selfPollInterval);
     }
@@ -778,188 +672,102 @@ function setupCKEditorSelfDetection(): void {
 
 setupCKEditorSelfDetection();
 
-// --- Top-frame: listen for overlay relay from iframes ---
+// --- Top-frame: listen for icon relay from iframes ---
 if (!isInIframe) {
-  // Track the source iframe selector for relaying Accept commands back
   let iframeOverlaySource = "";
-  // Only reposition when issues actually change
-  let lastIframeIssueIds = "";
-
-  // Find the outermost iframe in the top document that contains the editor
-  // (walks all direct iframes and picks the one related to the email composer)
-  function findEditorIframeRect(): DOMRect | null {
-    // Look for common Salesforce/CKEditor container iframes in the top document
-    const selectors = [
-      "iframe[title*='Email']",
-      "iframe[title*='editor' i]",
-      "iframe[title*='CK']",
-      "iframe[title*='Composer']",
-      "iframe[title*='Publisher']",
-    ];
-    for (const sel of selectors) {
-      const iframe = document.querySelector(sel) as HTMLIFrameElement | null;
-      if (iframe) return iframe.getBoundingClientRect();
-    }
-    // Fallback: find the largest visible iframe (likely the main Salesforce content area)
-    let bestIframe: HTMLIFrameElement | null = null;
-    let bestArea = 0;
-    const iframes = document.querySelectorAll("iframe");
-    for (const iframe of iframes) {
-      const rect = (iframe as HTMLIFrameElement).getBoundingClientRect();
-      const area = rect.width * rect.height;
-      if (area > bestArea && rect.width > 200 && rect.height > 100) {
-        bestArea = area;
-        bestIframe = iframe as HTMLIFrameElement;
-      }
-    }
-    return bestIframe ? bestIframe.getBoundingClientRect() : null;
-  }
 
   chrome.runtime.onMessage.addListener((message: any) => {
-    if (message.action === "render-overlay-from-iframe") {
-      console.log("[BambooInk] Top frame received overlay from iframe, issues:", message.issues.length);
+    if (message.action === "render-icon-from-iframe") {
       iframeOverlaySource = message.iframeSelector || "";
       currentIssues = message.issues;
+      isAiLoading = message.isAiLoading || false;
+      isAiComplete = message.isAiComplete || false;
 
-      if (currentIssues.length > 0) {
-        const { container } = ensureOverlayContainer();
+      const { shadow } = ensureOverlayContainer();
+      const caret = message.caretRect;
 
-        // Only reposition when the set of issues changes (not on every re-check)
-        const newIssueIds = currentIssues.map((i: any) => i.id).sort().join(",");
-        const issuesChanged = newIssueIds !== lastIframeIssueIds;
-        lastIframeIssueIds = newIssueIds;
+      if (caret) {
+        const iconX = caret.x + 10;
+        const iconY = caret.y + (caret.height || 16) + 8;
 
-        if (issuesChanged) {
-          // Position near the caret if we have coordinates from the iframe
-          const caret = message.caretRect;
-          if (caret) {
-            let x = caret.x + 10;
-            let y = caret.y + (caret.height || 16) + 8;
-            // Keep overlay on screen
-            if (x + 350 > window.innerWidth) x = window.innerWidth - 360;
-            if (x < 10) x = 10;
-            if (y + 300 > window.innerHeight) y = caret.y - 308;
-            if (y < 10) y = 10;
-            container.style.left = `${x}px`;
-            container.style.top = `${y}px`;
-            container.style.right = "auto";
-            container.style.bottom = "auto";
-          } else {
-            // Fallback: position near the editor iframe
-            const iframeRect = findEditorIframeRect();
-            if (iframeRect) {
-              let x = iframeRect.right - 360;
-              let y = iframeRect.bottom - 80;
-              if (x < iframeRect.left) x = iframeRect.left + 10;
-              if (x < 10) x = 10;
-              if (y + 200 > window.innerHeight) y = iframeRect.top + 10;
-              if (y < 10) y = 10;
-              container.style.left = `${x}px`;
-              container.style.top = `${y}px`;
-            } else {
-              container.style.right = "20px";
-              container.style.bottom = "20px";
-              container.style.left = "auto";
-              container.style.top = "auto";
-            }
+        renderIcon(
+          shadow,
+          { issueCount: currentIssues.length, isLoading: isAiLoading },
+          iconX,
+          iconY,
+          () => {
+            panelOpen = !panelOpen;
+            renderTopFramePanel(shadow, iconX, iconY, iframeOverlaySource);
           }
-        }
+        );
 
-        renderOverlayForIframe(iframeOverlaySource);
-      } else {
-        hideOverlay();
+        if (panelOpen) {
+          renderTopFramePanel(shadow, iconX, iconY, iframeOverlaySource);
+        }
       }
     }
   });
 
-  function renderOverlayForIframe(sourceIframeSelector: string): void {
-    const { container, shadow } = ensureOverlayContainer();
-
-    const oldPanel = shadow.querySelector(".bambooink-root");
-    if (oldPanel) oldPanel.remove();
-
-    if (currentIssues.length === 0) {
-      container.style.display = "none";
+  function renderTopFramePanel(shadow: ShadowRoot, iconX: number, iconY: number, sourceSelector: string): void {
+    if (!panelOpen) {
+      hidePanel(shadow);
       return;
     }
 
-    container.style.display = "block";
+    const panelX = iconX;
+    const panelY = iconY + 36;
 
-    const root = document.createElement("div");
-    root.className = "bambooink-root";
+    const panelState: PanelState = {
+      issues: currentIssues,
+      isAiLoading,
+      isAiComplete,
+    };
 
-    const isExpanded = container.dataset.expanded === "true";
-
-    if (!isExpanded) {
-      const pill = document.createElement("div");
-      pill.className = "bambooink-pill";
-      pill.innerHTML = `<span>${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span>`;
-      pill.addEventListener("click", (e) => {
-        e.stopPropagation();
-        container.dataset.expanded = "true";
-        renderOverlayForIframe(sourceIframeSelector);
-      });
-      root.appendChild(pill);
-    } else {
-      const panel = document.createElement("div");
-      panel.className = "bambooink-panel";
-
-      const header = document.createElement("div");
-      header.className = "bambooink-header";
-      header.innerHTML = `<span>BambooInk - ${currentIssues.length} issue${currentIssues.length !== 1 ? "s" : ""}</span><span style="font-size:16px">&#x2715;</span>`;
-      header.addEventListener("click", (e) => {
-        e.stopPropagation();
-        container.dataset.expanded = "false";
-        renderOverlayForIframe(sourceIframeSelector);
-      });
-      panel.appendChild(header);
-
-      for (const issue of currentIssues) {
-        const issueEl = document.createElement("div");
-        issueEl.className = "bambooink-issue";
-
-        const typeClass = `type-${issue.type}`;
-        issueEl.innerHTML = `
-          <span class="bambooink-issue-type ${typeClass}">${escapeHtml(issue.label)}</span>
-          <div>
-            <span class="bambooink-original">${escapeHtml(issue.original)}</span>
-            <span class="bambooink-arrow">&rarr;</span>
-            <span class="bambooink-suggestion">${escapeHtml(issue.suggestion)}</span>
-          </div>
-          <div class="bambooink-explanation">${escapeHtml(issue.explanation)}</div>
-          <div class="bambooink-actions">
-            <button class="bambooink-btn bambooink-btn-accept" data-issue-id="${issue.id}">Accept</button>
-            <button class="bambooink-btn bambooink-btn-dismiss" data-issue-id="${issue.id}">Dismiss</button>
-          </div>
-        `;
-
-        // Accept: relay replacement to the iframe
-        issueEl.querySelector(".bambooink-btn-accept")?.addEventListener("click", (e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          // Send replacement command to all frames — the iframe with the active element will handle it
-          chrome.runtime.sendMessage({
-            action: "relay-replace-to-iframe",
-            original: issue.original,
-            suggestion: issue.suggestion,
-          });
-          currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-          setTimeout(() => renderOverlayForIframe(sourceIframeSelector), 100);
+    renderPanel(shadow, panelState, panelX, panelY, {
+      onAccept: (issue: Issue) => {
+        chrome.runtime.sendMessage({
+          action: "relay-replace-to-iframe",
+          original: issue.original,
+          suggestion: issue.suggestion,
         });
-
-        issueEl.querySelector(".bambooink-btn-dismiss")?.addEventListener("click", (e) => {
-          e.stopPropagation();
-          currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-          renderOverlayForIframe(sourceIframeSelector);
+        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+        renderTopFramePanel(shadow, iconX, iconY, sourceSelector);
+        renderIcon(
+          shadow,
+          { issueCount: currentIssues.length, isLoading: isAiLoading },
+          iconX,
+          iconY,
+          () => {
+            panelOpen = !panelOpen;
+            renderTopFramePanel(shadow, iconX, iconY, sourceSelector);
+          }
+        );
+      },
+      onDismiss: (issue: Issue) => {
+        currentIssues = currentIssues.filter((i) => i.id !== issue.id);
+        renderTopFramePanel(shadow, iconX, iconY, sourceSelector);
+        renderIcon(
+          shadow,
+          { issueCount: currentIssues.length, isLoading: isAiLoading },
+          iconX,
+          iconY,
+          () => {
+            panelOpen = !panelOpen;
+            renderTopFramePanel(shadow, iconX, iconY, sourceSelector);
+          }
+        );
+      },
+      onEnhance: () => {
+        // Tell the iframe to run AI check
+        chrome.runtime.sendMessage({
+          action: "relay-enhance-to-iframe",
         });
-
-        panel.appendChild(issueEl);
-      }
-
-      root.appendChild(panel);
-    }
-
-    shadow.appendChild(root);
+      },
+      onClose: () => {
+        panelOpen = false;
+        hidePanel(shadow);
+      },
+    });
   }
 }
 

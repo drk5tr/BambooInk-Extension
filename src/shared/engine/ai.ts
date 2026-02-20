@@ -34,13 +34,13 @@ function buildPrompt(
   tone: ToneSetting,
   goals: WritingGoal[]
 ): string {
-  return `You are BambooInk, a writing assistant. Analyze the text below and return ONLY a JSON object with issues found.
+  return `You are BambooInk, a writing enhancement assistant. Basic spelling and grammar have already been checked locally. Focus your analysis on higher-level writing quality.
 
 Check for:
-1. SPELLING — Misspelled words, typos, and incorrect word forms. Do NOT flag proper nouns, names, brand names, or intentional abbreviations.
-2. GRAMMAR — Contextual grammar errors including wrong homophones (their/there/they're, hear/here, affect/effect, your/you're, its/it's, then/than, loose/lose), subject-verb disagreement, incorrect tense, and other structural issues.
-3. TONE — Text that violates the required tone: "${tone}"
-4. CLARITY — Vague, unclear, overly complex, or jargon-heavy phrasing
+1. GRAMMAR — Contextual grammar errors that regex rules miss: wrong homophones (their/there/they're, affect/effect, your/you're, its/it's, then/than, loose/lose), subject-verb disagreement, incorrect tense, and subtle structural issues.
+2. TONE — Text that violates the required tone: "${tone}"
+3. CLARITY — Vague, unclear, overly complex, or jargon-heavy phrasing
+4. SPELLING — Only flag contextual misspellings missed by a dictionary (e.g., "defiantly" when "definitely" was intended).
 
 Tone setting: ${tone}
 Writing goals: ${goals.join(", ")}

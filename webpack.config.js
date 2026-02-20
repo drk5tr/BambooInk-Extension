@@ -24,6 +24,7 @@ module.exports = (env, argv) => {
     },
     resolve: {
       extensions: [".ts", ".tsx", ".js"],
+      fallback: { fs: false, path: false },
     },
     module: {
       rules: [

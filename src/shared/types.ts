@@ -88,16 +88,13 @@ export interface RemoveDictionaryWordMessage {
   word: string;
 }
 
-export interface RelayOverlayMessage {
-  action: "relay-overlay-to-top";
+export interface RelayIconToTopMessage {
+  action: "relay-icon-to-top";
   issues: Issue[];
   iframeSelector: string;
-}
-
-export interface RenderOverlayFromIframeMessage {
-  action: "render-overlay-from-iframe";
-  issues: Issue[];
-  iframeSelector: string;
+  caretRect: { x: number; y: number; width: number; height: number } | null;
+  isAiLoading: boolean;
+  isAiComplete: boolean;
 }
 
 export interface RelayReplaceToIframeMessage {
@@ -106,12 +103,16 @@ export interface RelayReplaceToIframeMessage {
   suggestion: string;
 }
 
+export interface RelayEnhanceToIframeMessage {
+  action: "relay-enhance-to-iframe";
+}
+
 export type ExtensionMessage =
   | CheckTextMessage
   | GetSettingsMessage
   | UpdateSettingsMessage
   | AddDictionaryWordMessage
   | RemoveDictionaryWordMessage
-  | RelayOverlayMessage
-  | RenderOverlayFromIframeMessage
-  | RelayReplaceToIframeMessage;
+  | RelayIconToTopMessage
+  | RelayReplaceToIframeMessage
+  | RelayEnhanceToIframeMessage;
