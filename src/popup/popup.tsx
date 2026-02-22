@@ -23,8 +23,6 @@ function Popup() {
     );
   };
 
-  const hasApiKey = !!settings.apiKey;
-
   return (
     <div style={{ fontFamily: "'Segoe UI', sans-serif", padding: 16, minWidth: 280 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
@@ -42,19 +40,6 @@ function Popup() {
         </div>
       </div>
 
-      {!hasApiKey && (
-        <div style={{
-          background: "#FEF3C7", border: "1px solid #F59E0B",
-          borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12,
-        }}>
-          No API key configured.{" "}
-          <a href="#" onClick={(e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); }}
-            style={{ color: "#D97706", fontWeight: 600 }}>
-            Set up in Settings
-          </a>
-        </div>
-      )}
-
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 12px", background: "#f9fafb", borderRadius: 8,
@@ -71,10 +56,6 @@ function Popup() {
         }}>
           {settings.enabled ? "ON" : "OFF"}
         </button>
-      </div>
-
-      <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 8 }}>
-        Tone: <strong style={{ color: "#374151" }}>{settings.tone}</strong>
       </div>
 
       <button onClick={() => chrome.runtime.openOptionsPage()} style={{

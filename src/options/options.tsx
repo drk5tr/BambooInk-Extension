@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Settings, ToneSetting, WritingGoal } from "../shared/types";
-import { TONES, GOALS, BRAND } from "../shared/constants";
+import type { Settings } from "../shared/types";
+import { BRAND } from "../shared/constants";
 import "./options.css";
 
 function Options() {
@@ -49,103 +49,49 @@ function Options() {
         )}
       </div>
 
-      {/* API Key */}
-      <Section title="API Key">
-        <label style={{ fontSize: 13, color: "#6b7280", display: "block", marginBottom: 4 }}>
-          Anthropic API Key
-        </label>
-        <input
-          type="password"
-          value={settings.apiKey}
-          onChange={(e) => update({ apiKey: e.target.value })}
-          placeholder="sk-ant-api..."
-          style={{
-            width: "100%", padding: "8px 12px", borderRadius: 8,
-            border: "1px solid #d1d5db", fontSize: 13, outline: "none",
-          }}
-        />
-        <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-          Get your key at{" "}
-          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer"
-            style={{ color: BRAND.primary }}>
-            console.anthropic.com
-          </a>
-        </p>
-      </Section>
-
-      {/* Tone */}
-      <Section title="Tone">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {TONES.map((tone) => (
-            <button
-              key={tone}
-              onClick={() => update({ tone })}
-              style={{
-                padding: "6px 14px", borderRadius: 20, border: "1px solid",
-                borderColor: settings.tone === tone ? BRAND.primaryDark : "#d1d5db",
-                background: settings.tone === tone ? BRAND.primaryDark : "white",
-                color: settings.tone === tone ? "white" : "#374151",
-                fontSize: 12, fontWeight: 500, cursor: "pointer",
-              }}
-            >
-              {tone}
-            </button>
-          ))}
-        </div>
-      </Section>
-
-      {/* Goals */}
-      <Section title="Writing Goals">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {GOALS.map((goal) => {
-            const active = settings.goals.includes(goal);
-            return (
-              <button
-                key={goal}
-                onClick={() => {
-                  const next = active
-                    ? settings.goals.filter((g) => g !== goal)
-                    : [...settings.goals, goal];
-                  update({ goals: next });
-                }}
-                style={{
-                  padding: "6px 14px", borderRadius: 20, border: "1px solid",
-                  borderColor: active ? BRAND.primaryDark : "#d1d5db",
-                  background: active ? BRAND.primaryDark : "white",
-                  color: active ? "white" : "#374151",
-                  fontSize: 12, fontWeight: 500, cursor: "pointer",
-                }}
-              >
-                {goal}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-
       {/* Check Types */}
       <Section title="Check Types">
         <Toggle label="Spelling" checked={settings.spelling} onChange={(v) => update({ spelling: v })} />
         <Toggle label="Grammar" checked={settings.grammar} onChange={(v) => update({ grammar: v })} />
-        <Toggle label="Tone" checked={settings.toneCheck} onChange={(v) => update({ toneCheck: v })} />
-        <Toggle label="Clarity" checked={settings.clarity} onChange={(v) => update({ clarity: v })} />
       </Section>
 
-      {/* Debounce */}
-      <Section title="Debounce">
-        <label style={{ fontSize: 13, color: "#6b7280", display: "block", marginBottom: 4 }}>
-          Wait time after typing stops (ms)
-        </label>
-        <input
-          type="number"
-          value={settings.debounceMs}
-          onChange={(e) => update({ debounceMs: parseInt(e.target.value) || 800 })}
-          style={{
-            width: 120, padding: "6px 10px", borderRadius: 8,
-            border: "1px solid #d1d5db", fontSize: 13,
-          }}
-        />
+      {/* AI Grammar */}
+      <Section title="AI Grammar (OpenAI)">
+        <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0, marginBottom: 8 }}>
+          Uses OpenAI GPT-4.1 mini for advanced grammar checking. Requires an OpenAI API key.
+        </p>
+        <Toggle label="AI Grammar" checked={settings.aiGrammar} onChange={(v) => update({ aiGrammar: v })} />
+        <div style={{ marginTop: 8 }}>
+          <label style={{ fontSize: 13, color: "#6b7280", display: "block", marginBottom: 4 }}>
+            OpenAI API Key
+          </label>
+          <input
+            type="password"
+            value={settings.openaiApiKey}
+            placeholder="sk-..."
+            onChange={(e) => update({ openaiApiKey: e.target.value })}
+            style={{
+              width: "100%", padding: "6px 10px", borderRadius: 8,
+              border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box",
+            }}
+          />
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <label style={{ fontSize: 13, color: "#6b7280", display: "block", marginBottom: 4 }}>
+            Pause before AI check (ms)
+          </label>
+          <input
+            type="number"
+            value={settings.aiIdleMs}
+            onChange={(e) => update({ aiIdleMs: parseInt(e.target.value) || 1000 })}
+            style={{
+              width: 120, padding: "6px 10px", borderRadius: 8,
+              border: "1px solid #d1d5db", fontSize: 13,
+            }}
+          />
+        </div>
       </Section>
+
     </div>
   );
 }

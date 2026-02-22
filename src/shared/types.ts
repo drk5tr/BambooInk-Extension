@@ -1,73 +1,52 @@
-export type IssueType = "spelling" | "grammar" | "tone" | "clarity";
-export type Tier = "local" | "ai";
-export type ToneSetting =
-  | "Professional"
-  | "Friendly"
-  | "Formal"
-  | "Casual"
-  | "Empathetic"
-  | "Direct";
-export type WritingGoal =
-  | "Business Writing"
-  | "Academic Writing"
-  | "Customer Support"
-  | "Marketing Copy"
-  | "Technical Docs";
+export type IssueType = "spelling" | "grammar";
 
 export interface Issue {
   id: string;
   type: IssueType;
-  tier: Tier;
   label: string;
   original: string;
   suggestion: string;
+  alternatives?: string[];
   explanation: string;
   position: { start: number; end: number };
-  latency: number;
-  confidence?: number;
 }
 
 export interface Settings {
   enabled: boolean;
-  tone: ToneSetting;
-  goals: WritingGoal[];
   spelling: boolean;
   grammar: boolean;
-  toneCheck: boolean;
-  clarity: boolean;
-  aiEngine: boolean;
-  apiKey: string;
-  debounceMs: number;
   maxTextLength: number;
   customDictionary: string[];
+  openaiApiKey: string;
+  aiGrammar: boolean;
+  aiIdleMs: number;
 }
 
-export interface EngineResult {
-  tier: Tier;
-  issues: Issue[];
-  latency: number;
+// --- Check-word: single word at cursor ---
+
+export interface CheckWordMessage {
+  action: "check-word";
+  word: string;
+  context: string;
 }
 
-export interface AcceptFixPayload {
-  issueId: string;
-  original: string;
-  suggestion: string;
+export interface CheckWordResponse {
+  misspelled: boolean;
+  suggestions: Array<{ word: string; score: number }>;
 }
 
-// Message types for chrome.runtime messaging
-export type MessageAction =
-  | "check-text"
-  | "get-settings"
-  | "update-settings"
-  | "add-dictionary-word"
-  | "remove-dictionary-word";
+// --- Check-text: full text for grammar rules + batch spell ---
 
 export interface CheckTextMessage {
   action: "check-text";
   text: string;
-  tone: ToneSetting;
-  goals: WritingGoal[];
 }
+
+export interface CheckTextResponse {
+  issues: Issue[];
+}
+
+// --- Settings & dictionary messages ---
 
 export interface GetSettingsMessage {
   action: "get-settings";
@@ -88,13 +67,13 @@ export interface RemoveDictionaryWordMessage {
   word: string;
 }
 
-export interface RelayIconToTopMessage {
-  action: "relay-icon-to-top";
+// --- Iframe relay messages ---
+
+export interface RelayPanelToTopMessage {
+  action: "relay-panel-to-top";
   issues: Issue[];
-  iframeSelector: string;
-  caretRect: { x: number; y: number; width: number; height: number } | null;
-  isAiLoading: boolean;
-  isAiComplete: boolean;
+  iframeRect: { x: number; y: number; width: number; height: number } | null;
+  panelOpen: boolean;
 }
 
 export interface RelayReplaceToIframeMessage {
@@ -103,16 +82,35 @@ export interface RelayReplaceToIframeMessage {
   suggestion: string;
 }
 
-export interface RelayEnhanceToIframeMessage {
-  action: "relay-enhance-to-iframe";
+export interface RelayUpdateIssuesToIframeMessage {
+  action: "relay-update-issues-to-iframe";
+  issues: Issue[];
+}
+
+// --- AI grammar check ---
+
+export interface CheckGrammarAIMessage {
+  action: "check-grammar-ai";
+  text: string;
+}
+
+export interface CheckGrammarAIResponse {
+  issues: Issue[];
+}
+
+export interface ResetAIGateMessage {
+  action: "reset-ai-gate";
 }
 
 export type ExtensionMessage =
+  | CheckWordMessage
   | CheckTextMessage
+  | CheckGrammarAIMessage
   | GetSettingsMessage
   | UpdateSettingsMessage
   | AddDictionaryWordMessage
   | RemoveDictionaryWordMessage
-  | RelayIconToTopMessage
+  | RelayPanelToTopMessage
   | RelayReplaceToIframeMessage
-  | RelayEnhanceToIframeMessage;
+  | RelayUpdateIssuesToIframeMessage
+  | ResetAIGateMessage;

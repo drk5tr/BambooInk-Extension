@@ -1,10 +1,7 @@
 const path = require("path");
-const webpack = require("webpack");
 const CopyPlugin = require("copy-webpack-plugin");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
 
-// Load .env file
-require("dotenv").config();
 
 module.exports = (env, argv) => {
   const isDev = argv.mode === "development";
@@ -40,9 +37,6 @@ module.exports = (env, argv) => {
       ],
     },
     plugins: [
-      new webpack.DefinePlugin({
-        BAMBOOINK_API_KEY: JSON.stringify(process.env.BAMBOOINK_API_KEY || ""),
-      }),
       new MiniCssExtractPlugin({ filename: "[name].css" }),
       new CopyPlugin({
         patterns: [

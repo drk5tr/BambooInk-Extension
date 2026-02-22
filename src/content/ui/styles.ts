@@ -23,15 +23,8 @@ export const SHADOW_STYLES = `
     box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   }
   .bambooink-icon svg {
-    width: 16px;
-    height: 16px;
-    fill: white;
-  }
-  .bambooink-icon-text {
-    color: white;
-    font-size: 14px;
-    font-weight: 700;
-    line-height: 1;
+    width: 22px;
+    height: 22px;
   }
   .bambooink-badge {
     position: absolute;
@@ -142,6 +135,28 @@ export const SHADOW_STYLES = `
     color: #6b7280;
     margin-top: 4px;
   }
+  .bambooink-alternatives {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .bambooink-alt-btn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    cursor: pointer;
+    font-weight: 500;
+    font-family: inherit;
+  }
+  .bambooink-alt-btn:hover {
+    background: #15803D;
+    color: white;
+    border-color: #15803D;
+  }
   .bambooink-actions {
     display: flex;
     gap: 6px;
@@ -166,45 +181,4 @@ export const SHADOW_STYLES = `
   }
   .bambooink-btn-dismiss:hover { background: #e5e7eb; }
 
-  /* Enhance with AI Button */
-  .bambooink-enhance-section {
-    padding: 8px 14px 10px;
-    border-top: 1px solid #e5e7eb;
-  }
-  .bambooink-enhance-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    background: linear-gradient(135deg, #7C3AED, #6D28D9);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-    width: 100%;
-    justify-content: center;
-    font-family: inherit;
-  }
-  .bambooink-enhance-btn:hover { opacity: 0.9; }
-  .bambooink-enhance-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .bambooink-enhance-btn .spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: bambooink-spin 0.6s linear infinite;
-  }
-  @keyframes bambooink-spin {
-    to { transform: rotate(360deg); }
-  }
-  .bambooink-ai-done {
-    padding: 6px 14px;
-    text-align: center;
-    font-size: 11px;
-    color: #7C3AED;
-    font-weight: 500;
-  }
 `;

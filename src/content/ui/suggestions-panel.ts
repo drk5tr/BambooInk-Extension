@@ -2,14 +2,11 @@ import type { Issue } from "../../shared/types";
 
 export interface PanelState {
   issues: Issue[];
-  isAiLoading: boolean;
-  isAiComplete: boolean;
 }
 
 export interface PanelCallbacks {
   onAccept: (issue: Issue) => void;
   onDismiss: (issue: Issue) => void;
-  onEnhance: () => void;
   onClose: () => void;
 }
 
@@ -72,18 +69,33 @@ export function renderPanel(
       row.className = "bambooink-issue";
 
       const typeClass = `type-${issue.type}`;
-      const tierLabel = issue.tier === "ai" ? " \uD83E\uDDE0" : "";
 
       row.innerHTML = `
-        <span class="bambooink-issue-type ${typeClass}">${escapeHtml(issue.label)}${tierLabel}</span>
+        <span class="bambooink-issue-type ${typeClass}">${escapeHtml(issue.label)}</span>
         <div>
           <span class="bambooink-original">${escapeHtml(issue.original)}</span>
           <span class="bambooink-arrow">&rarr;</span>
           <span class="bambooink-suggestion">${escapeHtml(issue.suggestion)}</span>
         </div>
         <div class="bambooink-explanation">${escapeHtml(issue.explanation)}</div>
+        <div class="bambooink-alternatives"></div>
         <div class="bambooink-actions"></div>
       `;
+
+      // Show clickable alternatives for spelling issues
+      if (issue.alternatives && issue.alternatives.length > 1) {
+        const altContainer = row.querySelector(".bambooink-alternatives")!;
+        for (const alt of issue.alternatives) {
+          const altBtn = document.createElement("button");
+          altBtn.className = "bambooink-alt-btn";
+          altBtn.textContent = alt;
+          altBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            callbacks.onAccept({ ...issue, suggestion: alt });
+          });
+          altContainer.appendChild(altBtn);
+        }
+      }
 
       const actions = row.querySelector(".bambooink-actions")!;
 
@@ -110,32 +122,6 @@ export function renderPanel(
   }
 
   panel.appendChild(body);
-
-  // Enhance with AI section
-  const enhanceSection = document.createElement("div");
-  enhanceSection.className = "bambooink-enhance-section";
-
-  if (state.isAiComplete) {
-    enhanceSection.innerHTML = `<div class="bambooink-ai-done">\u2713 AI enhancement complete</div>`;
-  } else {
-    const enhanceBtn = document.createElement("button");
-    enhanceBtn.className = "bambooink-enhance-btn";
-    enhanceBtn.disabled = state.isAiLoading;
-    if (state.isAiLoading) {
-      enhanceBtn.innerHTML = `<span class="spinner"></span> Analyzing...`;
-    } else {
-      enhanceBtn.innerHTML = `\uD83E\uDDE0 Enhance with AI`;
-    }
-    enhanceBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!state.isAiLoading) {
-        callbacks.onEnhance();
-      }
-    });
-    enhanceSection.appendChild(enhanceBtn);
-  }
-
-  panel.appendChild(enhanceSection);
   shadow.appendChild(panel);
 
   // Adjust if panel goes off-screen

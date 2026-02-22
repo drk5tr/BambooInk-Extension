@@ -1,3 +1,8 @@
+/**
+ * Spell checker running in the service worker context.
+ * Uses typo.js for dictionary validation and raw candidate generation.
+ */
+
 import Typo from "typo-js";
 
 let typoInstance: Typo | null = null;
@@ -26,7 +31,7 @@ export async function initSpellChecker(): Promise<void> {
         fetch(dicUrl).then((r) => r.text()),
       ]);
       typoInstance = new Typo("en_US", affData, dicData);
-      console.log("[BambooInk] Spell checker initialized");
+      console.log("[BambooInk] Spell checker initialized in service worker");
     } catch (e) {
       console.error("[BambooInk] Failed to load dictionary:", e);
     }
@@ -38,7 +43,63 @@ export function updateCustomDictionary(words: string[]): void {
   customDict = new Set(words.map((w) => w.toLowerCase()));
 }
 
-// Tokenize text into words with their positions
+export function checkWord(word: string): boolean {
+  if (!typoInstance) return true;
+  if (customDict.has(word.toLowerCase())) return true;
+  return typoInstance.check(word);
+}
+
+export function suggestWord(word: string, limit: number = 15): string[] {
+  if (!typoInstance) return [];
+  const suggestions = typoInstance.suggest(word, limit);
+
+  // Supplement with edit-distance-1 candidates typo.js may miss
+  const seen = new Set(suggestions.map((s) => s.toLowerCase()));
+  const edits = generateEdits1(word.toLowerCase());
+  for (const edit of edits) {
+    if (!seen.has(edit) && typoInstance.check(edit)) {
+      suggestions.push(edit);
+      seen.add(edit);
+    }
+  }
+
+  return suggestions;
+}
+
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
+function generateEdits1(word: string): string[] {
+  const results: string[] = [];
+
+  // Insertions: add one letter at each position
+  for (let i = 0; i <= word.length; i++) {
+    for (const c of ALPHABET) {
+      results.push(word.slice(0, i) + c + word.slice(i));
+    }
+  }
+
+  // Deletions: remove one letter at each position
+  for (let i = 0; i < word.length; i++) {
+    results.push(word.slice(0, i) + word.slice(i + 1));
+  }
+
+  // Substitutions: replace one letter at each position
+  for (let i = 0; i < word.length; i++) {
+    for (const c of ALPHABET) {
+      if (c !== word[i]) {
+        results.push(word.slice(0, i) + c + word.slice(i + 1));
+      }
+    }
+  }
+
+  // Transpositions: swap adjacent letters
+  for (let i = 0; i < word.length - 1; i++) {
+    results.push(word.slice(0, i) + word[i + 1] + word[i] + word.slice(i + 2));
+  }
+
+  return results;
+}
+
 interface WordToken {
   word: string;
   start: number;
@@ -51,9 +112,7 @@ function tokenizeWords(text: string): WordToken[] {
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     const word = match[0];
-    // Skip single characters (except "I" and "a")
     if (word.length === 1 && word !== "I" && word !== "a") continue;
-    // Skip words that are all apostrophes
     if (word.replace(/'/g, "").length === 0) continue;
     tokens.push({
       word,
@@ -65,26 +124,25 @@ function tokenizeWords(text: string): WordToken[] {
 }
 
 function isLikelyProperNoun(word: string, start: number, text: string): boolean {
-  // First letter is uppercase
   if (word[0] !== word[0].toUpperCase()) return false;
-  // If it's the first word in the text or after a period, don't assume proper noun
   if (start === 0) return false;
   const before = text.substring(Math.max(0, start - 3), start).trimEnd();
   if (before.endsWith(".") || before.endsWith("!") || before.endsWith("?")) return false;
-  // Mid-sentence capitalized word — likely a proper noun
   return true;
 }
 
 function isSkippable(word: string): boolean {
-  // Skip URLs, emails, numbers
   if (/^\d+$/.test(word)) return true;
   if (word.includes("@")) return true;
   if (/^https?/i.test(word)) return true;
-  // Skip very short words that are likely abbreviations
   if (word.length <= 1) return true;
   return false;
 }
 
+/**
+ * Check all words in a text block. Returns raw spelling issues with unranked suggestions.
+ * The service worker will score and rank suggestions via the scorer.
+ */
 export function checkSpelling(text: string): SpellingIssue[] {
   if (!typoInstance) return [];
   const tokens = tokenizeWords(text);
@@ -96,12 +154,12 @@ export function checkSpelling(text: string): SpellingIssue[] {
     if (isLikelyProperNoun(token.word, token.start, text)) continue;
 
     if (!typoInstance.check(token.word)) {
-      const suggestions = typoInstance.suggest(token.word, 3);
+      const raw = suggestWord(token.word, 15);
       issues.push({
         word: token.word,
         start: token.start,
         end: token.end,
-        suggestions,
+        suggestions: raw,
       });
     }
   }
