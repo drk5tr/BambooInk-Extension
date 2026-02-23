@@ -1,4 +1,5 @@
-export type IssueType = "spelling" | "grammar";
+export type IssueType = "spelling" | "grammar" | "punctuation" | "tone";
+export type Channel = "email" | "chat" | "internal_note";
 
 export interface Issue {
   id: string;
@@ -92,6 +93,8 @@ export interface RelayUpdateIssuesToIframeMessage {
 export interface CheckGrammarAIMessage {
   action: "check-grammar-ai";
   text: string;
+  channel: Channel;
+  dismissed: string[];
 }
 
 export interface CheckGrammarAIResponse {

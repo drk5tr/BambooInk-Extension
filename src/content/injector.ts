@@ -2,6 +2,8 @@
  * Text field detection, text extraction, replacement, and cursor word extraction.
  */
 
+import type { Channel } from "../shared/types";
+
 // --- Text Field Detection ---
 
 export function isTextField(el: Element): el is HTMLElement {
@@ -33,13 +35,11 @@ export function isTextField(el: Element): el is HTMLElement {
 
   // Salesforce: only activate on email compose body and chat widget
   if (isSalesforce()) {
-    console.log("[BambooInk][SF] isTextField check:", el.tagName, el.className, "contentEditable:", (el as any).isContentEditable, "inIframe:", window !== window.top);
     if (el instanceof HTMLInputElement) return false;
     if (el instanceof HTMLElement && el.isContentEditable) {
       const closestLIRT = el.closest("lightning-input-rich-text");
       const isCke = el.classList.contains("cke_editable");
       const closestChat = el.closest("conversation-message-input, lightning-formatted-rich-text");
-      console.log("[BambooInk][SF] contentEditable:", { closestLIRT: !!closestLIRT, isCke, closestChat: !!closestChat });
       // Email compose: rich text editor inside lightning-input-rich-text
       if (closestLIRT) return true;
       // CKEditor-based email body
@@ -48,7 +48,6 @@ export function isTextField(el: Element): el is HTMLElement {
       if (closestChat) return true;
       // Fallback: if inside iframe with contenteditable body, likely an editor
       if (window !== window.top && (el === document.body || el.closest("body"))) {
-        console.log("[BambooInk][SF] iframe body contenteditable — accepting");
         return true;
       }
       return false;
@@ -81,6 +80,24 @@ function isSlack(): boolean {
 function isSalesforce(): boolean {
   const h = location.hostname;
   return h.endsWith(".force.com") || h.endsWith(".salesforce.com");
+}
+
+/** Auto-detect channel type based on current site */
+export function detectChannel(): Channel {
+  if (isGmail()) return "email";
+  if (isSlack()) return "chat";
+  if (isSalesforce()) {
+    const active = document.activeElement as HTMLElement | null;
+    if (active) {
+      const isInternal =
+        active.closest("[data-component-id*='internalNote']") ||
+        active.closest(".slds-publisher__toggle-visibility") ||
+        active.closest("[data-component-id*='chatter']");
+      if (isInternal) return "internal_note";
+    }
+    return "email";
+  }
+  return "email";
 }
 
 /** Resolve to the outermost editor container (e.g. .ql-editor on Slack) */
@@ -157,22 +174,23 @@ export function replaceTextInElement(
     const normalizedIdx = normalizedFull.indexOf(normalizedOriginal);
     if (normalizedIdx === -1) return;
 
-    let rawIdx = 0;
-    let normCount = 0;
-    while (normCount < normalizedIdx && rawIdx < fullText.length) {
-      rawIdx++;
-      normCount++;
+    // Build a map from each normalized character index to its raw index.
+    // This accounts for unicode chars replaced 1-to-1 and whitespace runs
+    // collapsed to a single space during normalization.
+    const normToRaw: number[] = [];
+    let prevWasSpace = false;
+    for (let ri = 0; ri < fullText.length; ri++) {
+      let ch = fullText[ri];
+      if (/[\u00a0\u200b\u200c\u200d\ufeff]/.test(ch)) ch = " ";
+      const isSpace = /\s/.test(ch);
+      if (isSpace && prevWasSpace) continue; // collapsed away in normalized text
+      normToRaw.push(ri);
+      prevWasSpace = isSpace;
     }
-    const idx = rawIdx;
+    normToRaw.push(fullText.length); // sentinel for end-of-string
 
-    let rawEnd = idx;
-    let matchedNorm = 0;
-    while (matchedNorm < normalizedOriginal.length && rawEnd < fullText.length) {
-      rawEnd++;
-      matchedNorm++;
-    }
-
-    const matchEnd = rawEnd;
+    const idx = normToRaw[normalizedIdx] ?? 0;
+    const matchEnd = normToRaw[normalizedIdx + normalizedOriginal.length] ?? fullText.length;
     let startNode: Text | null = null;
     let startOffset = 0;
     let endNode: Text | null = null;

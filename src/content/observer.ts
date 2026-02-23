@@ -117,10 +117,8 @@ function handleCursorMove(e: Event): void {
 
 function handleInput(e: Event): void {
   const rawEl = getRealTarget(e);
-  console.log("[BambooInk] handleInput:", rawEl?.tagName, rawEl?.className, "isTextField:", rawEl ? isTextField(rawEl) : false, "inIframe:", isInIframe);
   if (!rawEl || !isTextField(rawEl)) return;
   const el = resolveEditorRoot(rawEl);
-  console.log("[BambooInk] handleInput accepted, resolved:", el.tagName, el.className);
   activeElement = el;
 
   // Reposition icon immediately
@@ -170,10 +168,8 @@ function handleFocusOut(_e: FocusEvent): void {
 function setupCKEditorSelfDetection(): void {
   if (window === window.top) return;
 
-  console.log("[BambooInk][iframe] setupCKEditorSelfDetection running, hostname:", location.hostname);
   try {
     const fe = window.frameElement;
-    console.log("[BambooInk][iframe] frameElement:", fe?.tagName, fe?.id, fe?.className, "title:", fe?.getAttribute("title"));
     if (fe) {
       if (fe.classList.contains("cke_wysiwyg_frame")) {
         iframeSelector = "iframe.cke_wysiwyg_frame";
@@ -184,12 +180,9 @@ function setupCKEditorSelfDetection(): void {
       } else {
         iframeSelector = "iframe[contenteditable-body]";
       }
-    } else {
-      console.log("[BambooInk][iframe] frameElement is null — likely cross-origin");
     }
-    console.log("[BambooInk][iframe] resolved iframeSelector:", iframeSelector);
-  } catch (e) {
-    console.log("[BambooInk][iframe] cross-origin error:", e);
+  } catch {
+    // Cross-origin iframe — cannot access frameElement
   }
 
   // Listen for text replacement commands from the top frame

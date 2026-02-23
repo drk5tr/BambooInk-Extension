@@ -31,7 +31,6 @@ export async function initSpellChecker(): Promise<void> {
         fetch(dicUrl).then((r) => r.text()),
       ]);
       typoInstance = new Typo("en_US", affData, dicData);
-      console.log("[BambooInk] Spell checker initialized in service worker");
     } catch (e) {
       console.error("[BambooInk] Failed to load dictionary:", e);
     }

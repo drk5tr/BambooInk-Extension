@@ -168,7 +168,9 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ gated: true });
             return;
           }
-          const issues = await checkGrammarAI(message.text, apiKey);
+          const channel = message.channel || "email";
+          const dismissed = message.dismissed || [];
+          const issues = await checkGrammarAI(message.text, apiKey, channel, dismissed);
           sendResponse({ issues });
         });
         return true;
@@ -260,5 +262,3 @@ chrome.runtime.onMessage.addListener(
     }
   }
 );
-
-console.log("[BambooInk] Service worker started");

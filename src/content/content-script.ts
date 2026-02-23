@@ -1,7 +1,8 @@
 import "./content-script.css";
 import type { Settings, CheckWordResponse, CheckTextResponse, CheckGrammarAIResponse, Issue } from "../shared/types";
 import { setupObservers, setAiIdleMs, setActiveElement } from "./observer";
-import { initUI, updateUI, hideUI, setCurrentIssues, getCurrentIssues, isInteractingWithOverlay } from "./overlay";
+import { initUI, updateUI, hideUI, setCurrentIssues, getCurrentIssues, isInteractingWithOverlay, getDismissedOriginals } from "./overlay";
+import { detectChannel } from "./injector";
 
 let settings: Settings | null = null;
 
@@ -91,7 +92,7 @@ setupObservers({
     if (aiEnabled) {
       // AI handles both spelling and grammar — skip local checks
       safeSendMessage(
-        { action: "check-grammar-ai", text },
+        { action: "check-grammar-ai", text, channel: detectChannel(), dismissed: getDismissedOriginals() },
         (aiResponse: CheckGrammarAIResponse & { gated?: boolean }) => {
           if (!aiResponse || aiResponse.gated) return;
           setCurrentIssues(aiResponse.issues || []);
@@ -141,5 +142,3 @@ setupObservers({
 });
 
 initUI();
-
-console.log("[BambooInk] Content script loaded", { hostname: location.hostname, inIframe: window !== window.top, url: location.href.substring(0, 100) });

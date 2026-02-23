@@ -117,8 +117,8 @@ export const SHADOW_STYLES = `
   }
   .type-spelling { background: #FEE2E2; color: #DC2626; }
   .type-grammar { background: #FEF3C7; color: #D97706; }
+  .type-punctuation { background: #DBEAFE; color: #2563EB; }
   .type-tone { background: #E0E7FF; color: #4F46E5; }
-  .type-clarity { background: #E0F2FE; color: #0284C7; }
   .bambooink-original {
     text-decoration: line-through;
     color: #9ca3af;

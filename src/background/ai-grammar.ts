@@ -1,14 +1,66 @@
-import type { Issue } from "../shared/types";
+import type { Issue, IssueType, Channel } from "../shared/types";
 
-const SYSTEM_PROMPT = `You are a spelling, grammar, and professional tone checker. Given text, return ONLY a JSON object.
-Format: { "issues": [{ "type": "spelling" | "grammar", "original": "exact matched text", "suggestion": "corrected", "explanation": "brief reason", "start": charIndex, "end": charIndex }] }
-STRICT RULES:
-- Report spelling mistakes, typos, grammar, punctuation, and word-choice errors.
-- Flag overly casual, unprofessional, or weak phrasing (slang, filler words, vague language) and suggest clearer, more professional alternatives. Use type "grammar" for these.
-- Set "type" to "spelling" for misspellings and typos, "grammar" for everything else (grammar, punctuation, word-choice, tone).
-- "start" and "end" must be exact character indices in the input text.
-- "original" must be the exact substring from the input.
-Return {"issues":[]} if no issues found.`;
+const SYSTEM_PROMPT = `You are BambooInk, an expert writing assistant embedded in a customer support agent's workflow. You check spelling, grammar, punctuation, and professional tone in real-time.
+
+ROLE CONTEXT:
+The writer is a customer support agent at a payroll/HR software company. They communicate with business owners, HR managers, and employees about payroll, benefits, time tracking, and HR topics.
+
+CHECKING RULES:
+
+Spelling:
+- Flag misspelled words and provide the correct spelling
+- Do NOT flag proper nouns, people's names, company names, or product/feature names (e.g. BambooHR, QuickBooks, Gusto, Xero, ADP, Paychex)
+- Do NOT flag common industry acronyms (PTO, FMLA, W-2, W-4, 1099, I-9, COBRA, HSA, FSA, ACA, FLSA, EIN, SSN, YTD, QTD, MTD, EFT, ACH, EOD, SLA, CX, CSAT, NPS, QA, SOP)
+- Do NOT flag technical terms common in support (e.g. screenshot, login, dropdown, checkbox, navbar, admin, sync, timezone, workflow, onboarding, offboarding, reprocessing)
+- If unsure whether a word is a name or a misspelling, skip it — false positives are worse than missed errors
+
+Grammar:
+- Flag incorrect verb tense, subject-verb disagreement, sentence fragments, run-on sentences, and dangling modifiers
+- Flag commonly confused words used incorrectly in context (their/there/they're, your/you're, its/it's, affect/effect, then/than, to/too/two, lose/loose, ensure/insure, could have not "could of", etc.)
+- Do NOT rewrite sentences that are grammatically acceptable — only flag actual errors
+- Do NOT flag sentence-ending prepositions or split infinitives
+- Do NOT suggest overly formal rewrites that sound unnatural
+
+Punctuation:
+- Flag missing periods at sentence ends, missing commas before coordinating conjunctions in compound sentences
+- Flag unnecessary apostrophes, missing question marks on questions, comma splices
+- Do NOT flag missing Oxford commas — this is a style choice
+- Do NOT flag exclamation marks in chat unless excessive (3+)
+
+Tone:
+- Evaluate against the required tone setting provided in the user message
+- Flag language that is too casual, too aggressive, too demanding, too passive, or mismatched with the tone requirement
+- Common patterns: demanding language, urgency pressure, negative framing, blame language, ALL CAPS, passive-aggressive phrasing, dismissive language
+
+RESPONSE FORMAT:
+Return ONLY a valid JSON object. No markdown, no code fences, no explanation outside the JSON.
+
+If no issues found:
+{ "issues": [] }
+
+If issues found:
+{
+  "issues": [
+    {
+      "type": "spelling | grammar | punctuation | tone",
+      "original": "exact text from the input to replace — must appear verbatim in the source text",
+      "suggestion": "corrected text",
+      "explanation": "one sentence in plain English that helps the agent understand WHY this is an issue"
+    }
+  ]
+}
+
+QUALITY RULES:
+- Only flag issues you are confident about (>90% certainty)
+- Maximum 8 issues per check — prioritize the most impactful errors first
+- Priority order: spelling errors > grammar errors > punctuation > tone
+- Explanations should teach, not just correct
+- Preserve the agent's voice — do not make everything sound corporate or robotic
+- Keep suggestions concise — do not expand a 5-word phrase into 15 words
+- If the original text and suggestion would be identical, do not flag it
+- If the text is already well-written, return { "issues": [] }
+- Never return duplicate issues for the same text span
+- The "original" field must be an exact substring match from the input`;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -25,8 +77,8 @@ function fnv1a(str: string): string {
 // --- Cache ---
 const cache = new Map<string, { result: Issue[]; timestamp: number }>();
 
-function getCached(text: string): Issue[] | null {
-  const key = fnv1a(text);
+function getCached(text: string, channel: Channel): Issue[] | null {
+  const key = fnv1a(text + channel);
   const entry = cache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
@@ -36,8 +88,8 @@ function getCached(text: string): Issue[] | null {
   return entry.result;
 }
 
-function setCache(text: string, result: Issue[]): void {
-  const key = fnv1a(text);
+function setCache(text: string, channel: Channel, result: Issue[]): void {
+  const key = fnv1a(text + channel);
   cache.set(key, { result, timestamp: Date.now() });
 
   // Evict old entries
@@ -60,30 +112,85 @@ export function hasTextChanged(text: string): boolean {
   return text !== lastAICheckedText;
 }
 
+// --- User prompt builder ---
+function buildUserPrompt(
+  text: string,
+  channel: Channel,
+  dismissed: string[]
+): string {
+  const parts: string[] = [];
+
+  parts.push("TONE: Professional");
+
+  parts.push(`CHANNEL: ${channel}`);
+
+  switch (channel) {
+    case "chat":
+      parts.push(
+        "CHANNEL RULES: This is a live chat. Slightly informal phrasing " +
+        "is acceptable (contractions, sentence fragments for quick replies). " +
+        "Focus on clarity, spelling, and tone over strict grammar. " +
+        "Do not flag: single-word replies, casual greetings, or " +
+        "conversational transitions like 'Sure!' or 'Got it.'"
+      );
+      break;
+    case "email":
+      parts.push(
+        "CHANNEL RULES: This is a customer email. Apply full spelling, " +
+        "grammar, punctuation, and tone checking. Emails should be " +
+        "complete sentences with proper structure."
+      );
+      break;
+    case "internal_note":
+      parts.push(
+        "CHANNEL RULES: This is an internal case note visible only to " +
+        "the support team. Skip tone checking entirely. Only check " +
+        "spelling and major grammar errors. Internal shorthand and " +
+        "abbreviations are acceptable."
+      );
+      break;
+  }
+
+  if (dismissed.length > 0) {
+    parts.push(
+      `SKIP THESE: The agent already dismissed these suggestions. ` +
+      `Do not flag them again:\n` +
+      dismissed.map(d => `- "${d}"`).join("\n")
+    );
+  }
+
+  parts.push(`\nTEXT TO CHECK:\n---\n${text}\n---`);
+
+  return parts.join("\n\n");
+}
+
+// --- AI issue interface (no start/end from API) ---
 interface AIIssue {
-  type?: "spelling" | "grammar";
+  type?: string;
   original: string;
   suggestion: string;
   explanation: string;
-  start: number;
-  end: number;
 }
 
 export async function checkGrammarAI(
   text: string,
-  apiKey: string
+  apiKey: string,
+  channel: Channel = "email",
+  dismissed: string[] = []
 ): Promise<Issue[]> {
   // Skip very short inputs
   if (text.length < 15) return [];
 
   // Cache check
-  const cached = getCached(text);
+  const cached = getCached(text, channel);
   if (cached) return cached;
 
   // Update tracking immediately to prevent duplicate calls during async API request
   lastAICheckedText = text;
 
   try {
+    const userPrompt = buildUserPrompt(text, channel, dismissed);
+
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -94,10 +201,10 @@ export async function checkGrammarAI(
         model: "gpt-4.1-mini",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: text },
+          { role: "user", content: userPrompt },
         ],
-        temperature: 0,
-        max_tokens: 512,
+        temperature: 0.1,
+        max_tokens: 1024,
       }),
     });
 
@@ -110,34 +217,58 @@ export async function checkGrammarAI(
     const content = data.choices?.[0]?.message?.content;
     if (!content) return [];
 
-    const parsed = JSON.parse(content);
+    // Strip markdown fences before parsing
+    const cleaned = content
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+
+    const parsed = JSON.parse(cleaned);
     const aiIssues: AIIssue[] = parsed.issues || [];
 
     const issues: Issue[] = [];
+    const usedPositions = new Set<number>();
+
     for (let idx = 0; idx < aiIssues.length; idx++) {
       const ai = aiIssues[idx];
-      const issueType = ai.type === "spelling" ? "spelling" : "grammar";
 
-      // Validate: check if the original text actually exists at the reported position
-      let start = ai.start;
-      let end = ai.end;
-      const atPosition = text.substring(start, end);
+      // Skip no-ops
+      if (ai.original === ai.suggestion) continue;
+      if (!ai.original || !ai.suggestion || !ai.explanation) continue;
 
-      if (atPosition !== ai.original) {
-        // Position is wrong — try to find the original text in the input
-        const foundIdx = text.indexOf(ai.original);
-        if (foundIdx === -1) {
-          // AI hallucinated the original text — skip this issue
-          continue;
-        }
-        start = foundIdx;
-        end = foundIdx + ai.original.length;
+      // Map issue type
+      const validTypes = ["spelling", "grammar", "punctuation", "tone"];
+      const issueType: IssueType = validTypes.includes(ai.type || "")
+        ? (ai.type as IssueType)
+        : "grammar";
+
+      // Resolve position via indexOf with duplicate tracking
+      let searchFrom = 0;
+      let foundIdx = -1;
+      while (true) {
+        foundIdx = text.indexOf(ai.original, searchFrom);
+        if (foundIdx === -1) break;
+        if (!usedPositions.has(foundIdx)) break;
+        searchFrom = foundIdx + 1;
       }
+
+      if (foundIdx === -1) continue; // Original not found in text — skip
+
+      usedPositions.add(foundIdx);
+      const start = foundIdx;
+      const end = start + ai.original.length;
+
+      const labelMap: Record<IssueType, string> = {
+        spelling: "Spelling (AI)",
+        grammar: "Grammar (AI)",
+        punctuation: "Punctuation (AI)",
+        tone: "Tone (AI)",
+      };
 
       issues.push({
         id: `ai-${issueType}-${start}-${idx}`,
-        type: issueType as "spelling" | "grammar",
-        label: issueType === "spelling" ? "Spelling (AI)" : "Grammar (AI)",
+        type: issueType,
+        label: labelMap[issueType],
         original: ai.original,
         suggestion: ai.suggestion,
         explanation: ai.explanation,
@@ -145,7 +276,7 @@ export async function checkGrammarAI(
       });
     }
 
-    setCache(text, issues);
+    setCache(text, channel, issues);
     return issues;
   } catch (err) {
     console.warn("[BambooInk] AI grammar error:", err);

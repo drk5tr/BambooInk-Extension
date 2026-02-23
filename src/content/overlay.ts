@@ -23,6 +23,25 @@ let resizeObserver: ResizeObserver | null = null;
 let observedElement: HTMLElement | null = null;
 let bodyObserved = false;
 
+// --- Dismissed issue tracking ---
+const MAX_DISMISSED = 20;
+let dismissedOriginals: string[] = [];
+
+export function getDismissedOriginals(): string[] {
+  return dismissedOriginals;
+}
+
+export function resetDismissedOriginals(): void {
+  dismissedOriginals = [];
+}
+
+function trackDismissed(original: string): void {
+  if (dismissedOriginals.length >= MAX_DISMISSED) return;
+  if (!dismissedOriginals.includes(original)) {
+    dismissedOriginals.push(original);
+  }
+}
+
 let overlayContainer: HTMLDivElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
 let interactingWithOverlay = false;
@@ -192,6 +211,7 @@ export function updateUI(): void {
           updateUI();
         },
         onDismiss: (issue: Issue) => {
+          trackDismissed(issue.original);
           currentIssues = currentIssues.filter((i) => i.id !== issue.id);
           resetAIGateIfEmpty();
           updateUI();
@@ -214,17 +234,16 @@ export function hideUI(): void {
   }
   currentIssues = [];
   panelOpen = false;
+  resetDismissedOriginals();
 }
 
 function getIframeRectForTopFrame(): { x: number; y: number; width: number; height: number } | null {
   // Build the iframe's bounding rect in top-frame coordinates
   let rect = { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
-  let reachedTop = false;
   let win: Window = window;
   while (win !== win.top) {
     try {
       const fe = win.frameElement;
-      console.log("[BambooInk][iframe] getIframeRectForTopFrame frameElement:", fe?.tagName, fe?.id, "feIsNull:", !fe);
       if (!fe) break;
       const feRect = fe.getBoundingClientRect();
       rect.x += feRect.x;
@@ -232,13 +251,10 @@ function getIframeRectForTopFrame(): { x: number; y: number; width: number; heig
       rect.width = feRect.width;
       rect.height = feRect.height;
       win = win.parent;
-    } catch (e) {
-      console.log("[BambooInk][iframe] getIframeRectForTopFrame cross-origin error:", e);
+    } catch {
       break;
     }
   }
-  reachedTop = (win === win.top);
-  console.log("[BambooInk][iframe] getIframeRectForTopFrame result:", rect, "reachedTop:", reachedTop);
   return rect;
 }
 
@@ -366,6 +382,7 @@ function setupTopFrameIframeListener(): void {
             renderIframePanel();
           },
           onDismiss: (issue: Issue) => {
+            trackDismissed(issue.original);
             currentIssues = currentIssues.filter((i) => i.id !== issue.id);
             resetAIGateIfEmpty();
             syncIssuesToIframe();
