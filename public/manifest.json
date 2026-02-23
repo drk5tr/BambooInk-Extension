@@ -3,21 +3,39 @@
   "name": "BambooInk",
   "version": "1.0.0",
   "description": "AI-powered writing assistant that checks grammar, spelling, tone, and clarity in real-time.",
-  "permissions": ["activeTab", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://*.slack.com/*",
+    "https://*.salesforce.com/*",
+    "https://*.force.com/*",
+    "https://*.salesforceliveagent.com/*"
+  ],
   "background": {
     "service_worker": "service-worker.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://*.slack.com/*",
+        "https://*.salesforce.com/*",
+        "https://*.force.com/*",
+        "https://*.salesforceliveagent.com/*"
+      ],
       "js": ["shadow-hook.js"],
       "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true
     },
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://*.slack.com/*",
+        "https://*.salesforce.com/*",
+        "https://*.force.com/*",
+        "https://*.salesforceliveagent.com/*"
+      ],
       "js": ["content-script.js"],
       "css": ["content-script.css"],
       "run_at": "document_idle",
@@ -33,7 +51,13 @@
   "web_accessible_resources": [
     {
       "resources": ["shadow-hook-main.js", "dictionaries/*"],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "https://mail.google.com/*",
+        "https://*.slack.com/*",
+        "https://*.salesforce.com/*",
+        "https://*.force.com/*",
+        "https://*.salesforceliveagent.com/*"
+      ]
     }
   ],
   "icons": {

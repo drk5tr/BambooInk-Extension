@@ -22,6 +22,7 @@ function resetAIGateIfEmpty(): void {
 let resizeObserver: ResizeObserver | null = null;
 let observedElement: HTMLElement | null = null;
 let bodyObserved = false;
+let inputRepositionHandler: (() => void) | null = null;
 
 // --- Dismissed issue tracking ---
 const MAX_DISMISSED = 20;
@@ -98,8 +99,24 @@ function observeElement(el: HTMLElement | null): void {
   if (resizeObserver && observedElement) {
     resizeObserver.unobserve(observedElement);
   }
+  // Remove previous input listener for auto-growing textareas
+  if (inputRepositionHandler && observedElement) {
+    observedElement.removeEventListener("input", inputRepositionHandler);
+    inputRepositionHandler = null;
+  }
   observedElement = el;
   if (!el) return;
+  // For auto-growing textareas, reposition on every input since the top shifts
+  if (el instanceof HTMLTextAreaElement) {
+    inputRepositionHandler = () => {
+      if (!shadowRoot || !observedElement) return;
+      requestAnimationFrame(() => {
+        const pos = getElementBottomRight(observedElement);
+        if (pos) repositionIcon(shadowRoot!, pos.x, pos.y);
+      });
+    };
+    el.addEventListener("input", inputRepositionHandler);
+  }
   if (!resizeObserver) {
     resizeObserver = new ResizeObserver(() => {
       if (!shadowRoot || !observedElement) return;
@@ -136,19 +153,19 @@ function getElementBottomRight(el: HTMLElement | null): { x: number; y: number }
 
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
+
+  // Salesforce Live Agent: anchor to top of textarea so auto-grow doesn't shift icon
+  const isSFChat = el instanceof HTMLTextAreaElement && el.classList.contains("messaging-textarea");
+  if (isSFChat) {
+    return {
+      x: rect.right - 36,
+      y: rect.top - 40,
+    };
+  }
   return {
     x: rect.right - 36,
     y: rect.bottom - 36,
   };
-}
-
-export function repositionAtCursor(): void {
-  if (!shadowRoot) return;
-  const activeElement = getActiveElement();
-  const pos = getElementBottomRight(activeElement);
-  if (pos) {
-    repositionIcon(shadowRoot, pos.x, pos.y);
-  }
 }
 
 export function updateUI(): void {

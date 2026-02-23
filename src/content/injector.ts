@@ -36,24 +36,32 @@ export function isTextField(el: Element): el is HTMLElement {
   // Salesforce: only activate on email compose body and chat widget
   if (isSalesforce()) {
     if (el instanceof HTMLInputElement) return false;
-    if (el instanceof HTMLElement && el.isContentEditable) {
-      const closestLIRT = el.closest("lightning-input-rich-text");
+    if (el instanceof HTMLElement) {
+      // Skip search fields, lookups, and comboboxes — but not chat/compose areas
+      const role = el.getAttribute("role");
+      const isChat = !!el.closest("conversation-message-input, lightning-formatted-rich-text, [class*='chat'], [class*='Chat']");
+      const isRichText = !!el.closest("lightning-input-rich-text");
       const isCke = el.classList.contains("cke_editable");
-      const closestChat = el.closest("conversation-message-input, lightning-formatted-rich-text");
-      // Email compose: rich text editor inside lightning-input-rich-text
-      if (closestLIRT) return true;
-      // CKEditor-based email body
-      if (isCke) return true;
-      // Chat / Omni-Channel message input
-      if (closestChat) return true;
-      // Fallback: if inside iframe with contenteditable body, likely an editor
-      if (window !== window.top && (el === document.body || el.closest("body"))) {
-        return true;
+
+      if (!isChat && !isRichText && !isCke) {
+        if (role === "combobox" || role === "searchbox") return false;
+        if (el.closest("lightning-input, lightning-combobox, lightning-lookup, lightning-grouped-combobox, [role='search']")) return false;
       }
-      return false;
+
+      if (el.isContentEditable) {
+        if (isRichText) return true;
+        if (isCke) return true;
+        if (isChat) return true;
+        // Fallback: if inside iframe with contenteditable body, likely an editor
+        if (window !== window.top && (el === document.body || el.closest("body"))) {
+          return true;
+        }
+        return false;
+      }
     }
     // Textareas used in chat widgets
     if (el instanceof HTMLTextAreaElement) {
+      if (el.classList.contains("messaging-textarea")) return true;
       if (el.closest("conversation-message-input, [class*='chat'], [class*='Chat']")) return true;
       return false;
     }
@@ -79,7 +87,7 @@ function isSlack(): boolean {
 
 function isSalesforce(): boolean {
   const h = location.hostname;
-  return h.endsWith(".force.com") || h.endsWith(".salesforce.com");
+  return h.endsWith(".force.com") || h.endsWith(".salesforce.com") || h.endsWith(".salesforceliveagent.com");
 }
 
 /** Auto-detect channel type based on current site */
@@ -241,28 +249,6 @@ export function replaceTextInElement(
 }
 
 // --- Caret Position ---
-
-export function getCaretRect(activeElement: HTMLElement | null): DOMRect | null {
-  const el = activeElement;
-  if (!el) return null;
-
-  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-    const rect = el.getBoundingClientRect();
-    return new DOMRect(rect.right - 20, rect.bottom, 0, 0);
-  }
-
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return null;
-  const range = sel.getRangeAt(0).cloneRange();
-  range.collapse(false);
-
-  const rects = range.getClientRects();
-  if (rects.length > 0) {
-    return rects[rects.length - 1];
-  }
-
-  return el.getBoundingClientRect();
-}
 
 export function getCaretRectForTopFrame(
   activeElement: HTMLElement | null
