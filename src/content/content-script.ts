@@ -11,15 +11,32 @@ function contextValid(): boolean {
   return !!chrome.runtime?.id;
 }
 
-function safeSendMessage(message: any, callback?: (response: any) => void): void {
+function safeSendMessage(message: any, callback?: (response: any) => void, _retry = false): void {
   if (!contextValid()) return;
   try {
     chrome.runtime.sendMessage(message, (response: any) => {
-      if (chrome.runtime.lastError || !contextValid()) return;
+      if (chrome.runtime.lastError) {
+        if (!_retry) {
+          console.warn("[BambooInk] Service worker waking up, retrying in 500ms...", message.action);
+          setTimeout(() => safeSendMessage(message, callback, true), 500);
+        } else {
+          console.warn("[BambooInk] Retry failed for", message.action, chrome.runtime.lastError.message);
+        }
+        return;
+      }
+      if (!contextValid()) return;
+      if (_retry) {
+        console.info("[BambooInk] Retry succeeded for", message.action);
+      }
       callback?.(response);
     });
   } catch {
-    // Context invalidated
+    if (!_retry) {
+      console.warn("[BambooInk] Send failed, retrying in 500ms...", message.action);
+      setTimeout(() => safeSendMessage(message, callback, true), 500);
+    } else {
+      console.warn("[BambooInk] Retry failed for", message.action);
+    }
   }
 }
 
