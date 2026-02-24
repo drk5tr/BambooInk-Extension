@@ -119,9 +119,10 @@ export function resolveEditorRoot(el: HTMLElement): HTMLElement {
 
 // Selectors for signature/boilerplate blocks to exclude from text extraction
 const SIGNATURE_SELECTORS = [
-  ".gmail_signature",          // Gmail
+  ".gmail_signature",          // Gmail signature
   "[data-smartmail='gmail_signature']",
-  ".gmail_extra",              // Gmail quoted/forwarded text
+  ".gmail_quote",              // Gmail reply/forward thread
+  ".gmail_extra",              // Gmail quoted/forwarded text (legacy)
 ];
 
 export function getTextFromElement(el: HTMLElement): string {
