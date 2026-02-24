@@ -117,12 +117,24 @@ export function resolveEditorRoot(el: HTMLElement): HTMLElement {
 
 // --- Text Extraction ---
 
+// Selectors for signature/boilerplate blocks to exclude from text extraction
+const SIGNATURE_SELECTORS = [
+  ".gmail_signature",          // Gmail
+  "[data-smartmail='gmail_signature']",
+  ".gmail_extra",              // Gmail quoted/forwarded text
+];
+
 export function getTextFromElement(el: HTMLElement): string {
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     return el.value;
   }
   if (el.isContentEditable) {
-    return (el.innerText || el.textContent || "").replace(/\u00a0/g, " ");
+    // Clone the element and remove signature blocks before extracting text
+    const clone = el.cloneNode(true) as HTMLElement;
+    for (const selector of SIGNATURE_SELECTORS) {
+      clone.querySelectorAll(selector).forEach(node => node.remove());
+    }
+    return (clone.innerText || clone.textContent || "").replace(/\u00a0/g, " ");
   }
   return "";
 }
