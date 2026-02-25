@@ -5,6 +5,7 @@
 
 import { isTextField, getTextFromElement, getRealTarget, getWordAtCursor, replaceTextInElement, resolveEditorRoot } from "./injector";
 import type { WordAtCursor } from "./injector";
+import { bumpAcceptGeneration, setLastAcceptedText } from "./overlay";
 
 export interface ObserverCallbacks {
   onWordChange: (wordInfo: WordAtCursor, element: HTMLElement) => void;
@@ -22,6 +23,7 @@ let lastCheckedText = "";
 let lastPolledText = "";
 let aiIdleMs = 1000;
 let suppressNextIdle = false;
+let suppressUntil = 0;
 
 const isInIframe = window !== window.top;
 let iframeSelector = "";
@@ -57,6 +59,12 @@ export function setAiIdleMs(ms: number): void {
 
 export function suppressNextIdleCheck(): void {
   suppressNextIdle = true;
+  // Block all recheck paths (idle timers, polling, mutation observer) for 10s
+  suppressUntil = Date.now() + 10000;
+}
+
+export function isTextCheckSuppressed(): boolean {
+  return Date.now() < suppressUntil;
 }
 
 // --- Shadow DOM walking ---
@@ -132,6 +140,7 @@ function handleInput(e: Event): void {
       suppressNextIdle = false;
       return;
     }
+    if (Date.now() < suppressUntil) return;
     const text = getTextFromElement(el).trim();
     if (text.length >= 10 && text !== lastCheckedText && !isPlaceholderText(text)) {
       lastCheckedText = text;
@@ -151,6 +160,7 @@ function handleFocusIn(e: FocusEvent): void {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     idleTimer = null;
+    if (Date.now() < suppressUntil) return;
     const text = getTextFromElement(el).trim();
     if (text.length >= 10 && text !== lastCheckedText && !isPlaceholderText(text)) {
       lastCheckedText = text;
@@ -195,15 +205,15 @@ function setupCKEditorSelfDetection(): void {
             target &&
             (target.isContentEditable || target instanceof HTMLTextAreaElement)
           ) {
+            suppressNextIdle = true;
+            suppressUntil = Date.now() + 10000;
+            bumpAcceptGeneration();
             replaceTextInElement(target, message.original, message.suggestion);
-            setTimeout(() => {
-              const newText = (document.body.innerText || "").replace(
-                /\u00a0/g,
-                " "
-              );
-              lastPolledText = newText;
-              lastCheckedText = newText.trim();
-            }, 250);
+            // Immediately update so idle/poll checks see the new text and skip
+            const newText = getTextFromElement(target).trim();
+            lastPolledText = newText;
+            lastCheckedText = newText;
+            setLastAcceptedText(newText);
           }
         }
       });
@@ -250,11 +260,12 @@ function setupCKEditorSelfDetection(): void {
       document.body &&
       (document.body.isContentEditable || document.designMode === "on")
     ) {
-      const text = (document.body.innerText || "").replace(/\u00a0/g, " ");
-      if (text.trim().length >= 10 && text !== lastPolledText && !idleTimer) {
+      const rawText = (document.body.innerText || "").replace(/\u00a0/g, " ");
+      const text = rawText.trim();
+      if (text.length >= 10 && text !== lastPolledText && !idleTimer && Date.now() >= suppressUntil) {
         activeElement = document.body;
         lastPolledText = text;
-        callbacks.onTextChange(text.trim(), document.body);
+        callbacks.onTextChange(text, document.body);
       }
     }
 
@@ -297,7 +308,7 @@ export function setupObservers(cbs: ObserverCallbacks): void {
             ) {
               activeElement = field;
               const text = getTextFromElement(field).trim();
-              if (text.length >= 10) {
+              if (text.length >= 10 && Date.now() >= suppressUntil) {
                 callbacks.onTextChange(text, field);
               }
             }
@@ -317,11 +328,11 @@ export function setupObservers(cbs: ObserverCallbacks): void {
       try {
         const active = shadow.activeElement;
         if (active instanceof HTMLElement && isTextField(active)) {
-          const text = getTextFromElement(active);
-          if (text.trim().length >= 10 && text !== lastPolledText) {
+          const text = getTextFromElement(active).trim();
+          if (text.length >= 10 && text !== lastPolledText && Date.now() >= suppressUntil) {
             activeElement = active;
             lastPolledText = text;
-            callbacks.onTextChange(text.trim(), active);
+            callbacks.onTextChange(text, active);
             return;
           }
         }

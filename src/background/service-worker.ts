@@ -14,7 +14,7 @@ import {
 } from "./spellcheck";
 import { rankSuggestions } from "./scorer";
 import { RULES } from "../shared/engine/rules";
-import { checkGrammarAI, hasTextChanged, resetGate } from "./ai-grammar";
+import { checkGrammarAI, hasTextChanged, resetGate, updateGate } from "./ai-grammar";
 
 // Initialize dictionary on startup
 initSpellChecker();
@@ -182,6 +182,12 @@ chrome.runtime.onMessage.addListener(
         return false;
       }
 
+      case "update-ai-gate": {
+        updateGate((message as any).text || "");
+        sendResponse({ ok: true });
+        return false;
+      }
+
       // --- Iframe relay ---
       case "relay-panel-to-top": {
         const tabId = _sender.tab?.id;
@@ -192,6 +198,7 @@ chrome.runtime.onMessage.addListener(
               action: "render-panel-from-iframe",
               issues: (message as any).issues,
               iframeRect: (message as any).iframeRect,
+              iconPos: (message as any).iconPos,
               panelOpen: (message as any).panelOpen,
             },
             { frameId: 0 }

@@ -1,8 +1,8 @@
 import "./content-script.css";
 import type { Settings, CheckWordResponse, CheckTextResponse, CheckGrammarAIResponse, Issue } from "../shared/types";
-import { setupObservers, setAiIdleMs, setActiveElement } from "./observer";
-import { initUI, updateUI, hideUI, setCurrentIssues, getCurrentIssues, isInteractingWithOverlay, getDismissedOriginals } from "./overlay";
-import { detectChannel } from "./injector";
+import { setupObservers, setAiIdleMs, setActiveElement, isTextCheckSuppressed, getActiveElement } from "./observer";
+import { initUI, updateUI, hideUI, setCurrentIssues, getCurrentIssues, isInteractingWithOverlay, getDismissedOriginals, getAcceptGeneration, getLastAcceptedText } from "./overlay";
+import { detectChannel, getTextFromElement } from "./injector";
 
 let settings: Settings | null = null;
 
@@ -103,16 +103,34 @@ setupObservers({
 
   onTextChange: (text, _element) => {
     if (!settings?.enabled) return;
+    if (isTextCheckSuppressed()) return;
 
     const aiEnabled = settings.aiGrammar && !!settings.openaiApiKey;
 
     if (aiEnabled) {
-      // AI handles both spelling and grammar — skip local checks
+      // Capture state so we can discard stale responses after an accept
+      const gen = getAcceptGeneration();
+      const requestText = text;
       safeSendMessage(
         { action: "check-grammar-ai", text, channel: detectChannel(), dismissed: getDismissedOriginals() },
         (aiResponse: CheckGrammarAIResponse & { gated?: boolean }) => {
           if (!aiResponse || aiResponse.gated) return;
-          setCurrentIssues(aiResponse.issues || []);
+          // Discard stale responses — an accept happened while this was in flight
+          if (gen !== getAcceptGeneration()) return;
+          // Discard if the editor text changed since we sent the request (e.g. accept replaced text)
+          const currentEl = getActiveElement();
+          if (currentEl) {
+            const currentText = getTextFromElement(currentEl).trim();
+            if (currentText !== requestText) return;
+          }
+          let issues = aiResponse.issues || [];
+          // Filter out issues on text that existed at accept time —
+          // prevents re-flagging corrected text for a different issue type (e.g. tone)
+          const acceptedText = getLastAcceptedText();
+          if (acceptedText) {
+            issues = issues.filter(i => !acceptedText.includes(i.original));
+          }
+          setCurrentIssues(issues);
           updateUI();
         }
       );

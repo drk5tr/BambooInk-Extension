@@ -48,6 +48,24 @@ let shadowRoot: ShadowRoot | null = null;
 let interactingWithOverlay = false;
 let panelOpen = false;
 let currentIssues: Issue[] = [];
+let acceptGeneration = 0;
+let lastAcceptedText = "";
+
+export function getAcceptGeneration(): number {
+  return acceptGeneration;
+}
+
+export function bumpAcceptGeneration(): void {
+  acceptGeneration++;
+}
+
+export function getLastAcceptedText(): string {
+  return lastAcceptedText;
+}
+
+export function setLastAcceptedText(text: string): void {
+  lastAcceptedText = text;
+}
 
 export function getCurrentIssues(): Issue[] {
   return currentIssues;
@@ -213,18 +231,20 @@ export function updateUI(): void {
 
       renderPanel(shadow, panelState, panelX, panelY, {
         onAccept: (issue: Issue) => {
+          acceptGeneration++;
+          trackDismissed(issue.suggestion);
           const targetEl = activeElement;
           if (targetEl) {
             suppressNextIdleCheck();
             replaceTextInElement(targetEl, issue.original, issue.suggestion);
-            setTimeout(() => {
-              if (targetEl) {
-                setLastCheckedText(getTextFromElement(targetEl).trim());
-              }
-            }, 250);
+            const newText = getTextFromElement(targetEl).trim();
+            lastAcceptedText = newText;
+            setLastCheckedText(newText);
+            try {
+              chrome.runtime.sendMessage({ action: "update-ai-gate", text: newText });
+            } catch { /* context invalidated */ }
           }
           currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-          resetAIGateIfEmpty();
           updateUI();
         },
         onDismiss: (issue: Issue) => {
@@ -251,6 +271,7 @@ export function hideUI(): void {
   }
   currentIssues = [];
   panelOpen = false;
+  lastAcceptedText = "";
   resetDismissedOriginals();
 }
 
@@ -278,11 +299,15 @@ function getIframeRectForTopFrame(): { x: number; y: number; width: number; heig
 function relayPanelToTop(): void {
   if (!chrome.runtime?.id) return;
   const iframeRect = getIframeRectForTopFrame();
+  // Send the actual icon position in iframe-local coordinates
+  const activeElement = getActiveElement();
+  const iconPos = getElementBottomRight(activeElement);
   try {
     chrome.runtime.sendMessage({
       action: "relay-panel-to-top",
       issues: currentIssues,
       iframeRect,
+      iconPos,
       panelOpen,
     });
   } catch {
@@ -360,10 +385,16 @@ function setupTopFrameIframeListener(): void {
         return;
       }
 
-      // Position panel just below where the icon sits (bottom-right of iframe viewport)
-      const panelX = iframeRect.x + iframeRect.width - 36;
-      // Icon is at iframeRect bottom - 36, panel starts just below icon (+36)
-      const panelY = iframeRect.y + iframeRect.height;
+      // Use relayed icon position if available, fallback to iframe bottom-right
+      const iconLocalPos = message.iconPos;
+      const panelX = iconLocalPos
+        ? iframeRect.x + iconLocalPos.x
+        : iframeRect.x + iframeRect.width - 36;
+      // Icon top in top-frame coordinates; panel will be placed above it
+      const iconTopY = iconLocalPos
+        ? iframeRect.y + iconLocalPos.y
+        : iframeRect.y + iframeRect.height - 36;
+      const panelY = iconTopY;
 
       function syncIssuesToIframe(): void {
         if (chrome.runtime?.id) {
@@ -377,13 +408,10 @@ function setupTopFrameIframeListener(): void {
       }
 
       function renderIframePanel(): void {
-        if (currentIssues.length === 0) {
-          hidePanel(shadow);
-          syncIssuesToIframe();
-          return;
-        }
         renderPanel(shadow, { issues: currentIssues }, panelX, panelY, {
           onAccept: (issue: Issue) => {
+            acceptGeneration++;
+            trackDismissed(issue.suggestion);
             if (chrome.runtime?.id) {
               try {
                 chrome.runtime.sendMessage({
@@ -394,14 +422,12 @@ function setupTopFrameIframeListener(): void {
               } catch { /* context invalidated */ }
             }
             currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-            resetAIGateIfEmpty();
             syncIssuesToIframe();
             renderIframePanel();
           },
           onDismiss: (issue: Issue) => {
             trackDismissed(issue.original);
             currentIssues = currentIssues.filter((i) => i.id !== issue.id);
-            resetAIGateIfEmpty();
             syncIssuesToIframe();
             renderIframePanel();
           },
@@ -409,7 +435,7 @@ function setupTopFrameIframeListener(): void {
             panelOpen = false;
             hidePanel(shadow);
           },
-        });
+        }, { above: true });
       }
       renderIframePanel();
     }

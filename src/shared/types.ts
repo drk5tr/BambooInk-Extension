@@ -105,6 +105,11 @@ export interface ResetAIGateMessage {
   action: "reset-ai-gate";
 }
 
+export interface UpdateAIGateMessage {
+  action: "update-ai-gate";
+  text: string;
+}
+
 export type ExtensionMessage =
   | CheckWordMessage
   | CheckTextMessage
@@ -116,4 +121,5 @@ export type ExtensionMessage =
   | RelayPanelToTopMessage
   | RelayReplaceToIframeMessage
   | RelayUpdateIssuesToIframeMessage
-  | ResetAIGateMessage;
+  | ResetAIGateMessage
+  | UpdateAIGateMessage;

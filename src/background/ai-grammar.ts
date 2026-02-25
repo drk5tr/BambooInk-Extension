@@ -26,6 +26,8 @@ Punctuation:
 - Flag unnecessary apostrophes, missing question marks on questions, comma splices
 - Do NOT flag missing Oxford commas — this is a style choice
 - Do NOT flag exclamation marks in chat unless excessive (3+)
+- Do NOT flag line breaks, paragraph breaks, or blank lines between sentences or sign-offs (e.g. "Thanks," followed by a new line is normal formatting)
+- Newlines in the input represent real line breaks in the editor. Do NOT treat a newline as a missing space — "this.\nThanks," is two separate lines, not "this.Thanks,"
 
 Tone:
 - Evaluate against the required tone setting provided in the user message
@@ -52,8 +54,8 @@ If issues found:
 
 QUALITY RULES:
 - Only flag issues you are confident about (>90% certainty)
-- Maximum 8 issues per check — prioritize the most impactful errors first
-- Priority order: spelling errors > grammar errors > punctuation > tone
+- Maximum 8 issues per check
+- Return ALL issue types in a single response — spelling, grammar, punctuation, and tone issues must all be included together, not separately
 - Explanations should teach, not just correct
 - Preserve the agent's voice — do not make everything sound corporate or robotic
 - Keep suggestions concise — do not expand a 5-word phrase into 15 words
@@ -108,6 +110,10 @@ export function resetGate(): void {
   lastAICheckedText = "";
 }
 
+export function updateGate(text: string): void {
+  lastAICheckedText = text;
+}
+
 export function hasTextChanged(text: string): boolean {
   return text !== lastAICheckedText;
 }
@@ -153,8 +159,8 @@ function buildUserPrompt(
 
   if (dismissed.length > 0) {
     parts.push(
-      `SKIP THESE: The agent already dismissed these suggestions. ` +
-      `Do not flag them again:\n` +
+      `SKIP THESE: The agent already reviewed or accepted corrections for these phrases. ` +
+      `Do not flag any of them for any issue type (spelling, grammar, punctuation, or tone):\n` +
       dismissed.map(d => `- "${d}"`).join("\n")
     );
   }

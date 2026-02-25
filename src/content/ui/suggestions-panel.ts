@@ -23,7 +23,8 @@ export function renderPanel(
   state: PanelState,
   x: number,
   y: number,
-  callbacks: PanelCallbacks
+  callbacks: PanelCallbacks,
+  options?: { above?: boolean }
 ): void {
   // Remove existing panel
   hidePanel(shadow);
@@ -124,18 +125,23 @@ export function renderPanel(
   panel.appendChild(body);
   shadow.appendChild(panel);
 
-  // Adjust if panel goes off-screen
+  // Adjust position after render
   requestAnimationFrame(() => {
     const rect = panel.getBoundingClientRect();
+    // If requested above, position panel so its bottom edge is at y
+    if (options?.above) {
+      panel.style.top = `${y - rect.height - 8}px`;
+    }
     if (rect.right > window.innerWidth) {
       panel.style.left = `${window.innerWidth - rect.width - 10}px`;
     }
-    if (rect.bottom > window.innerHeight) {
-      // Show above the icon instead
-      panel.style.top = `${y - rect.height - 40}px`;
+    // Re-read after horizontal adjustment
+    const updated = panel.getBoundingClientRect();
+    if (updated.bottom > window.innerHeight) {
+      panel.style.top = `${y - updated.height - 8}px`;
     }
-    if (rect.left < 0) panel.style.left = "10px";
-    if (rect.top < 0) panel.style.top = "10px";
+    if (updated.left < 0) panel.style.left = "10px";
+    if (updated.top < 0) panel.style.top = "10px";
   });
 }
 

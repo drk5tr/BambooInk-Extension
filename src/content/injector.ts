@@ -135,7 +135,13 @@ export function getTextFromElement(el: HTMLElement): string {
     for (const selector of SIGNATURE_SELECTORS) {
       clone.querySelectorAll(selector).forEach(node => node.remove());
     }
-    return (clone.innerText || clone.textContent || "").replace(/\u00a0/g, " ");
+    // Insert explicit newlines for block elements and <br> so they survive text extraction
+    clone.querySelectorAll("br").forEach(br => br.replaceWith("\n"));
+    clone.querySelectorAll("div, p, li, tr, blockquote").forEach(block => {
+      block.insertAdjacentText("beforebegin", "\n");
+    });
+    const text = (clone.textContent || "").replace(/\u00a0/g, " ");
+    return text;
   }
   return "";
 }
