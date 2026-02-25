@@ -1,4 +1,5 @@
 import type { Issue, IssueType, Channel } from "../shared/types";
+import { scrubPii, restorePii } from "./pii-scrubber";
 
 const SYSTEM_PROMPT = `You are BambooInk, an expert writing assistant embedded in a customer support agent's workflow. You check spelling, grammar, punctuation, and professional tone in real-time.
 
@@ -62,7 +63,8 @@ QUALITY RULES:
 - If the original text and suggestion would be identical, do not flag it
 - If the text is already well-written, return { "issues": [] }
 - Never return duplicate issues for the same text span
-- The "original" field must be an exact substring match from the input`;
+- The "original" field must be an exact substring match from the input
+- The input may contain placeholders like [SSN-1], [PHONE-1], [EMAIL-1], etc. These represent redacted sensitive data. Do not flag them as spelling or punctuation errors. Treat them as normal words.`;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -195,7 +197,9 @@ export async function checkGrammarAI(
   lastAICheckedText = text;
 
   try {
-    const userPrompt = buildUserPrompt(text, channel, dismissed);
+    // Scrub PII before sending to the API
+    const { sanitized, replacements } = scrubPii(text);
+    const userPrompt = buildUserPrompt(sanitized, channel, dismissed);
 
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -238,6 +242,11 @@ export async function checkGrammarAI(
     for (let idx = 0; idx < aiIssues.length; idx++) {
       const ai = aiIssues[idx];
 
+      // Restore PII in the AI response fields
+      ai.original = restorePii(ai.original, replacements);
+      ai.suggestion = restorePii(ai.suggestion, replacements);
+      ai.explanation = restorePii(ai.explanation, replacements);
+
       // Skip no-ops
       if (ai.original === ai.suggestion) continue;
       if (!ai.original || !ai.suggestion || !ai.explanation) continue;
@@ -248,7 +257,7 @@ export async function checkGrammarAI(
         ? (ai.type as IssueType)
         : "grammar";
 
-      // Resolve position via indexOf with duplicate tracking
+      // Resolve position against the ORIGINAL unsanitized text
       let searchFrom = 0;
       let foundIdx = -1;
       while (true) {
