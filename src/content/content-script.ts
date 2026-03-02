@@ -156,8 +156,18 @@ setupObservers({
     }
   },
 
-  onCursorMove: (_element) => {
-    // Icon is fixed to bottom-right of editor; no per-keystroke repositioning needed
+  onCursorMove: (element) => {
+    // Immediately prune issues whose original text was deleted from the editor
+    const issues = getCurrentIssues();
+    if (issues.length === 0) return;
+    const raw = element instanceof HTMLTextAreaElement
+      ? element.value
+      : (element.textContent || "").replace(/\u00a0/g, " ");
+    const pruned = issues.filter(i => raw.includes(i.original));
+    if (pruned.length !== issues.length) {
+      setCurrentIssues(pruned);
+      updateUI();
+    }
   },
 
   onFocusIn: (_element) => {

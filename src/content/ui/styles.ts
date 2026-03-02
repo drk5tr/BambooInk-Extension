@@ -116,7 +116,7 @@ export const SHADOW_STYLES = `
     margin-bottom: 4px;
   }
   .type-spelling { background: #FEE2E2; color: #DC2626; }
-  .type-grammar { background: #FEF3C7; color: #D97706; }
+  .type-grammar { background: #DBEAFE; color: #2563EB; }
   .type-punctuation { background: #DBEAFE; color: #2563EB; }
   .type-tone { background: #E0E7FF; color: #4F46E5; }
   .bambooink-original {
