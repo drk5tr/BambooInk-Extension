@@ -267,6 +267,175 @@ export function replaceTextInElement(
   }
 }
 
+// --- Plain-text offset → DOMRect mapping ---
+
+export function getRectsForIssue(
+  el: HTMLElement,
+  start: number,
+  end: number
+): DOMRect[] {
+  if (el instanceof HTMLTextAreaElement) {
+    return getRectsForTextarea(el, start, end);
+  }
+  if (!el.isContentEditable) return [];
+
+  // Walk the live DOM mirroring getTextFromElement()'s transformations,
+  // building a plainToRaw index map.
+  const BLOCK_TAGS = new Set(["DIV", "P", "LI", "TR", "BLOCKQUOTE"]);
+
+  // Collect mapping entries: { node: Text, rawOffset: number, plainOffset: number }
+  interface MapEntry {
+    node: Text;
+    rawOffset: number;   // char offset within this text node
+    plainOffset: number; // corresponding plain-text offset
+  }
+  const map: MapEntry[] = [];
+  let plainLen = 0;
+
+  function walk(node: Node, isRoot: boolean): void {
+    // Skip signature blocks (same selectors as getTextFromElement)
+    if (node instanceof HTMLElement) {
+      for (const sel of [
+        ".gmail_signature",
+        "[data-smartmail='gmail_signature']",
+        ".gmail_quote",
+        ".gmail_extra",
+      ]) {
+        if (node.matches(sel)) return;
+      }
+    }
+
+    if (node instanceof HTMLBRElement) {
+      plainLen++;
+      return;
+    }
+
+    if (node instanceof HTMLElement && !isRoot && BLOCK_TAGS.has(node.tagName)) {
+      plainLen++;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || "";
+      for (let i = 0; i < text.length; i++) {
+        map.push({ node: node as Text, rawOffset: i, plainOffset: plainLen });
+        plainLen++;
+      }
+      return;
+    }
+
+    const children = node.childNodes;
+    for (let i = 0; i < children.length; i++) {
+      walk(children[i], false);
+    }
+  }
+
+  walk(el, true);
+
+  // Apply the same normalization getTextFromElement does: \u00a0 → space
+  // The plain offsets already account for \n insertions from br/block.
+  // We need to adjust for \u00a0→space: the character count doesn't change,
+  // so the offsets are the same.
+
+  if (start >= plainLen || end > plainLen || start >= end) return [];
+
+  // Find the map entry for start and end
+  let startEntry: MapEntry | null = null;
+  let endEntry: MapEntry | null = null;
+
+  for (let i = 0; i < map.length; i++) {
+    if (!startEntry && map[i].plainOffset >= start) {
+      startEntry = map[i];
+    }
+    if (map[i].plainOffset < end) {
+      endEntry = map[i];
+    }
+  }
+
+  if (!startEntry || !endEntry) return [];
+
+  try {
+    const range = document.createRange();
+    range.setStart(startEntry.node, startEntry.rawOffset);
+    range.setEnd(endEntry.node, endEntry.rawOffset + 1);
+    return Array.from(range.getClientRects());
+  } catch {
+    return [];
+  }
+}
+
+// --- Textarea mirror-div for rect measurement ---
+
+const MIRROR_PROPS = [
+  "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing",
+  "wordSpacing", "lineHeight", "textTransform", "textIndent",
+  "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+  "boxSizing", "whiteSpace", "wordWrap", "overflowWrap", "direction",
+] as const;
+
+function getRectsForTextarea(
+  ta: HTMLTextAreaElement,
+  start: number,
+  end: number
+): DOMRect[] {
+  const text = ta.value;
+  if (start >= text.length || end > text.length || start >= end) return [];
+
+  const mirror = document.createElement("div");
+  const style = getComputedStyle(ta);
+  for (const prop of MIRROR_PROPS) {
+    mirror.style[prop as any] = style[prop as any];
+  }
+  mirror.style.position = "absolute";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  mirror.style.visibility = "hidden";
+  mirror.style.overflow = "hidden";
+  mirror.style.width = `${ta.clientWidth}px`;
+  mirror.style.height = "auto";
+  // whiteSpace must preserve wrapping like textarea
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.wordBreak = "break-word";
+
+  // Build content: before + span(target) + after
+  const before = text.slice(0, start);
+  const target = text.slice(start, end);
+  const after = text.slice(end);
+
+  mirror.textContent = "";
+  const beforeNode = document.createTextNode(before);
+  const span = document.createElement("span");
+  span.textContent = target;
+  const afterNode = document.createTextNode(after);
+  mirror.appendChild(beforeNode);
+  mirror.appendChild(span);
+  mirror.appendChild(afterNode);
+
+  document.body.appendChild(mirror);
+
+  const taRect = ta.getBoundingClientRect();
+  const spanRects = span.getClientRects();
+  const result: DOMRect[] = [];
+
+  // Convert mirror-relative rects to viewport coordinates,
+  // accounting for textarea scroll position
+  const mirrorRect = mirror.getBoundingClientRect();
+  for (const r of spanRects) {
+    if (r.width === 0) continue;
+    const offsetX = r.left - mirrorRect.left;
+    const offsetY = r.top - mirrorRect.top;
+    result.push(new DOMRect(
+      taRect.left + offsetX,
+      taRect.top + offsetY - ta.scrollTop,
+      r.width,
+      r.height
+    ));
+  }
+
+  mirror.remove();
+  return result;
+}
+
 // --- Caret Position ---
 
 export function getCaretRectForTopFrame(

@@ -181,4 +181,50 @@ export const SHADOW_STYLES = `
   }
   .bambooink-btn-dismiss:hover { background: #e5e7eb; }
 
+  /* Inline Underlines */
+  .bambooink-underline {
+    position: fixed;
+    pointer-events: auto;
+    cursor: pointer;
+    height: 10px;
+    border-bottom: 2px solid var(--underline-color);
+    background: transparent;
+    z-index: 2147483640;
+  }
+  .bambooink-underline:hover {
+    background: color-mix(in srgb, var(--underline-color) 10%, transparent);
+  }
+
+  /* Issue Popup */
+  .bambooink-issue-popup {
+    position: fixed;
+    z-index: 2147483646;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.1);
+    max-width: 280px;
+    min-width: 200px;
+    padding: 10px 12px;
+    pointer-events: auto;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    border: 1px solid #e5e7eb;
+  }
+  .bambooink-popup-label {
+    margin-bottom: 4px;
+  }
+  .bambooink-popup-text {
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  .bambooink-popup-explanation {
+    font-size: 11px;
+    color: #6b7280;
+    margin-top: 4px;
+  }
+  .bambooink-popup-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
 `;

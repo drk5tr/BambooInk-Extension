@@ -8,6 +8,8 @@ import { SHADOW_STYLES } from "./ui/styles";
 import { renderIcon, repositionIcon, hideIcon } from "./ui/floating-icon";
 import { renderPanel, hidePanel } from "./ui/suggestions-panel";
 import type { PanelState } from "./ui/suggestions-panel";
+import { renderUnderlines, clearUnderlines } from "./ui/underline-layer";
+import { showIssuePopup, hideIssuePopup } from "./ui/issue-popup";
 import { getCaretRectForTopFrame, replaceTextInElement, getTextFromElement } from "./injector";
 import { getActiveElement, getIframeSelector, getIsInIframe, setLastCheckedText, suppressNextIdleCheck } from "./observer";
 
@@ -50,6 +52,7 @@ let panelOpen = false;
 let currentIssues: Issue[] = [];
 let acceptGeneration = 0;
 let lastAcceptedText = "";
+let activePopupIssueId: string | null = null;
 
 export function getAcceptGeneration(): number {
   return acceptGeneration;
@@ -145,6 +148,7 @@ function observeElement(el: HTMLElement | null): void {
       } else {
         repositionIcon(shadowRoot, pos.x, pos.y);
       }
+      requestAnimationFrame(() => refreshUnderlines());
     });
   }
   resizeObserver.observe(el);
@@ -186,6 +190,78 @@ function getElementBottomRight(el: HTMLElement | null): { x: number; y: number }
   };
 }
 
+/** Shift positions of remaining issues after a text replacement */
+function adjustIssuePositions(acceptedIssue: Issue): void {
+  const delta = acceptedIssue.suggestion.length - acceptedIssue.original.length;
+  if (delta === 0) return;
+  const end = acceptedIssue.position.end;
+  for (const issue of currentIssues) {
+    if (issue.id === acceptedIssue.id) continue;
+    if (issue.position.start >= end) {
+      issue.position = {
+        start: issue.position.start + delta,
+        end: issue.position.end + delta,
+      };
+    }
+  }
+}
+
+function refreshUnderlines(): void {
+  if (!shadowRoot) return;
+  const activeElement = getActiveElement();
+  if (!activeElement || (!activeElement.isContentEditable && !(activeElement instanceof HTMLTextAreaElement))) {
+    clearUnderlines(shadowRoot);
+    return;
+  }
+  renderUnderlines(shadowRoot, currentIssues, activeElement, {
+    onIssueClick: (issue, anchorRect) => {
+      if (!shadowRoot) return;
+      // Close the panel if open
+      if (panelOpen) {
+        panelOpen = false;
+        hidePanel(shadowRoot);
+      }
+      // Toggle popup: close if same issue clicked again
+      if (activePopupIssueId === issue.id) {
+        hideIssuePopup(shadowRoot);
+        activePopupIssueId = null;
+        return;
+      }
+      activePopupIssueId = issue.id;
+      showIssuePopup(shadowRoot, issue, anchorRect, {
+        onAccept: (iss) => {
+          acceptGeneration++;
+          trackDismissed(iss.suggestion);
+          const targetEl = getActiveElement();
+          if (targetEl) {
+            suppressNextIdleCheck();
+            replaceTextInElement(targetEl, iss.original, iss.suggestion);
+            const newText = getTextFromElement(targetEl).trim();
+            lastAcceptedText = newText;
+            setLastCheckedText(newText);
+            try {
+              chrome.runtime.sendMessage({ action: "update-ai-gate", text: newText });
+            } catch { /* context invalidated */ }
+          }
+          adjustIssuePositions(iss);
+          currentIssues = currentIssues.filter((i) => i.id !== iss.id);
+          activePopupIssueId = null;
+          if (shadowRoot) hideIssuePopup(shadowRoot);
+          updateUI();
+        },
+        onDismiss: (iss) => {
+          trackDismissed(iss.original);
+          currentIssues = currentIssues.filter((i) => i.id !== iss.id);
+          activePopupIssueId = null;
+          if (shadowRoot) hideIssuePopup(shadowRoot);
+          resetAIGateIfEmpty();
+          updateUI();
+        },
+      });
+    },
+  });
+}
+
 export function updateUI(): void {
   const { shadow } = ensureOverlayContainer();
   const activeElement = getActiveElement();
@@ -212,9 +288,17 @@ export function updateUI(): void {
       if (inIframe) {
         // Relay panel toggle to top frame
         panelOpen = !panelOpen;
+        if (panelOpen && activePopupIssueId) {
+          hideIssuePopup(shadow);
+          activePopupIssueId = null;
+        }
         relayPanelToTop();
       } else {
         panelOpen = !panelOpen;
+        if (panelOpen && activePopupIssueId) {
+          hideIssuePopup(shadow);
+          activePopupIssueId = null;
+        }
         updateUI();
       }
     }
@@ -244,6 +328,7 @@ export function updateUI(): void {
               chrome.runtime.sendMessage({ action: "update-ai-gate", text: newText });
             } catch { /* context invalidated */ }
           }
+          adjustIssuePositions(issue);
           currentIssues = currentIssues.filter((i) => i.id !== issue.id);
           updateUI();
         },
@@ -262,15 +347,21 @@ export function updateUI(): void {
       hidePanel(shadow);
     }
   }
+
+  // Render underlines after icon/panel
+  requestAnimationFrame(() => refreshUnderlines());
 }
 
 export function hideUI(): void {
   if (shadowRoot) {
     hideIcon(shadowRoot);
     hidePanel(shadowRoot);
+    clearUnderlines(shadowRoot);
+    hideIssuePopup(shadowRoot);
   }
   currentIssues = [];
   panelOpen = false;
+  activePopupIssueId = null;
   lastAcceptedText = "";
   resetDismissedOriginals();
 }
@@ -318,19 +409,24 @@ function relayPanelToTop(): void {
 // --- Scroll/resize repositioning + click-outside ---
 
 export function initUI(): void {
-  // Close panel on click outside
+  // Close panel/popup on click outside
   document.addEventListener("click", (e) => {
-    if (
-      panelOpen &&
-      overlayContainer &&
-      !overlayContainer.contains(e.target as Node)
-    ) {
-      panelOpen = false;
-      updateUI();
+    if (overlayContainer && !overlayContainer.contains(e.target as Node)) {
+      let changed = false;
+      if (panelOpen) {
+        panelOpen = false;
+        changed = true;
+      }
+      if (activePopupIssueId && shadowRoot) {
+        hideIssuePopup(shadowRoot);
+        activePopupIssueId = null;
+        changed = true;
+      }
+      if (changed) updateUI();
     }
   });
 
-  // Reposition icon on scroll/resize
+  // Reposition icon + underlines on scroll/resize
   window.addEventListener(
     "scroll",
     () => {
@@ -340,6 +436,12 @@ export function initUI(): void {
         if (pos) {
           repositionIcon(shadowRoot, pos.x, pos.y);
         }
+        // Close popup on scroll (anchor rect has moved)
+        if (activePopupIssueId) {
+          hideIssuePopup(shadowRoot);
+          activePopupIssueId = null;
+        }
+        requestAnimationFrame(() => refreshUnderlines());
       }
     },
     true

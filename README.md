@@ -1,6 +1,6 @@
 # BambooInk
 
-A Chrome extension that provides real-time grammar, punctuation, and tone checking for customer support agents. Built for teams using Gmail, Slack, and Salesforce. Powered by GPT-4.1 mini.
+A Chrome extension that provides real-time grammar, punctuation, and professional tone checking for customer support agents. Built for teams using Gmail, Slack, and Salesforce. Powered by GPT-4.1 mini.
 
 ## How It Works
 
@@ -10,10 +10,12 @@ Each issue shows the original text, the suggested fix, and a plain-English expla
 
 ## Features
 
-- **Real-time inline UI** -- Shadow DOM isolated overlay that works inside Gmail compose, Slack message boxes, and Salesforce case editors without style conflicts
-- **Channel-aware checking** -- Automatically detects Gmail (email), Slack (chat), and Salesforce (email or internal note) and adjusts checking strictness. Chat mode is lenient with contractions and fragments; internal notes skip tone checking entirely.
+- **Inline underlines** -- Issues are marked directly in the text with colored underlines: red for spelling, blue for grammar/punctuation, purple for tone. Clicking an underline opens a compact popup with the suggested fix, Accept, and Dismiss buttons.
+- **Real-time inline UI** -- Shadow DOM isolated overlay that works inside Gmail compose, Slack message boxes, and Salesforce case editors (including textarea-based chat widgets) without style conflicts
+- **Mutual exclusion** -- Only one overlay is visible at a time. Clicking an underline closes the suggestions panel; clicking the bamboo icon closes any open issue popup.
+- **Channel-aware checking** -- Automatically detects Gmail (email), Slack (chat), and Salesforce (email or internal note) and adjusts checking strictness. Chat mode is lenient with contractions and fragments; internal notes skip tone checking entirely. All channels enforce a professional tone.
 - **PII scrubbing** -- Before any text reaches the OpenAI API, sensitive data (SSNs, credit cards, bank accounts, phone numbers, emails, EINs, dates of birth, routing numbers) is replaced with safe placeholders. Original values are restored in the response before display. PII never leaves the extension.
-- **CKEditor and iframe support** -- Detects and attaches to editors inside iframes and shadow DOM trees, with a polling fallback for edge cases
+- **CKEditor and iframe support** -- Detects and attaches to editors inside iframes and shadow DOM trees, with a polling fallback for edge cases. Underlines and popups render locally inside each iframe.
 - **Proper noun and acronym handling** -- The AI is instructed to skip capitalized proper nouns, URLs, email addresses, and a curated list of HR/payroll acronyms (PTO, FMLA, W-2, COBRA, etc.)
 - **Response caching** -- AI responses are cached in-memory with a 5-minute TTL to avoid redundant API calls
 - **Dismiss list** -- Dismissed suggestions are tracked per session and passed to subsequent AI calls to prevent re-flagging
@@ -78,6 +80,8 @@ src/
     ui/
       floating-icon.ts    # Bamboo icon with issue count badge
       suggestions-panel.ts # Issue cards with Accept/Dismiss actions
+      underline-layer.ts  # Inline colored underlines on flagged text
+      issue-popup.ts      # Per-issue popup on underline click
       styles.ts           # Shadow DOM stylesheet
 
   popup/
@@ -105,7 +109,7 @@ User types in Gmail/Slack/Salesforce
   |
   Response parsed, PII restored, issues returned with positions
   |
-  overlay.ts -- renders issues in floating panel
+  overlay.ts -- renders inline underlines + floating panel/popup
 ```
 
 ## Settings

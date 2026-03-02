@@ -30,9 +30,9 @@ Punctuation:
 - Do NOT flag line breaks, paragraph breaks, or blank lines between sentences or sign-offs (e.g. "Thanks," followed by a new line is normal formatting)
 - Newlines in the input represent real line breaks in the editor. Do NOT treat a newline as a missing space — "this.\nThanks," is two separate lines, not "this.Thanks,"
 
-Tone:
-- Evaluate against the required tone setting provided in the user message
-- Flag language that is too casual, too aggressive, too demanding, too passive, or mismatched with the tone requirement
+Tone (Professional):
+- All communication should maintain a professional tone
+- Flag language that is too casual, too aggressive, too demanding, or too passive for professional customer support
 - Common patterns: demanding language, urgency pressure, negative framing, blame language, ALL CAPS, passive-aggressive phrasing, dismissive language
 
 RESPONSE FORMAT:
