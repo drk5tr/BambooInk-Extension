@@ -294,7 +294,7 @@ export async function checkGrammarAI(
     setCache(text, channel, issues);
     return issues;
   } catch (err) {
-    console.warn("[BambooInk] AI grammar error:", err);
+    console.warn("[BambooInk] AI grammar error:", err instanceof Error ? err.message : "unknown error");
     return [];
   }
 }

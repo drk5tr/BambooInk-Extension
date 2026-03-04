@@ -73,9 +73,7 @@ export function scrubPii(text: string): PiiScrubResult {
   replacements.sort((a, b) => a.index - b.index);
 
   if (replacements.length > 0) {
-    console.log("[BambooInk][PII] Scrubbed %d item(s):", replacements.length,
-      replacements.map(r => `${r.original} → ${r.placeholder}`));
-    console.log("[BambooInk][PII] Sanitized text:", sanitized);
+    console.log("[BambooInk][PII] Scrubbed %d item(s)", replacements.length);
   }
 
   return { sanitized, replacements };
@@ -88,9 +86,6 @@ export function restorePii(
   let result = text;
   for (const r of replacements) {
     result = result.replace(r.placeholder, r.original);
-  }
-  if (result !== text) {
-    console.log("[BambooInk][PII] Restored PII in text:", result);
   }
   return result;
 }
