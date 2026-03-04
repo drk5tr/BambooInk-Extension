@@ -69,6 +69,15 @@ export function isTextCheckSuppressed(): boolean {
 
 // --- Shadow DOM walking ---
 
+function getShadowRoot(el: Element): ShadowRoot | null {
+  if (el.shadowRoot) return el.shadowRoot;
+  try {
+    return (chrome.dom as any).openOrClosedShadowRoot(el) as ShadowRoot | null;
+  } catch {
+    return null;
+  }
+}
+
 function attachShadowListeners(shadow: ShadowRoot): void {
   if (listenedShadowRoots.has(shadow)) return;
   listenedShadowRoots.add(shadow);
@@ -88,13 +97,17 @@ function attachShadowListeners(shadow: ShadowRoot): void {
 function walkDOMForShadowRoots(root: ShadowRoot | Element): void {
   const elements = root.querySelectorAll("*");
   for (const el of elements) {
-    if (el.shadowRoot) {
-      attachShadowListeners(el.shadowRoot);
-      walkDOMForShadowRoots(el.shadowRoot);
+    const shadow = getShadowRoot(el);
+    if (shadow) {
+      attachShadowListeners(shadow);
+      walkDOMForShadowRoots(shadow);
     }
   }
-  if (root instanceof Element && root.shadowRoot) {
-    attachShadowListeners(root.shadowRoot);
+  if (root instanceof Element) {
+    const shadow = getShadowRoot(root);
+    if (shadow) {
+      attachShadowListeners(shadow);
+    }
   }
 }
 

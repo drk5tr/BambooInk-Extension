@@ -23,19 +23,6 @@
         "https://*.force.com/*",
         "https://*.salesforceliveagent.com/*"
       ],
-      "js": ["shadow-hook.js"],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true
-    },
-    {
-      "matches": [
-        "https://mail.google.com/*",
-        "https://*.slack.com/*",
-        "https://*.salesforce.com/*",
-        "https://*.force.com/*",
-        "https://*.salesforceliveagent.com/*"
-      ],
       "js": ["content-script.js"],
       "css": ["content-script.css"],
       "run_at": "document_idle",
@@ -50,7 +37,7 @@
   "options_page": "options.html",
   "web_accessible_resources": [
     {
-      "resources": ["shadow-hook-main.js", "dictionaries/*"],
+      "resources": ["dictionaries/*"],
       "matches": [
         "https://mail.google.com/*",
         "https://*.slack.com/*",

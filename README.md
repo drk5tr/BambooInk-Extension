@@ -73,8 +73,7 @@ src/
 
   content/
     content-script.ts     # Entry point: wires observers to message sends
-    shadow-hook.ts        # Injects main-world script for shadow DOM access
-    observer.ts           # Input, focus, mutation, and iframe polling observers
+    observer.ts           # Input, focus, mutation, shadow DOM (via chrome.dom), and iframe polling observers
     overlay.ts            # Shadow DOM container for the floating UI
     injector.ts           # Text field detection, extraction, and replacement
     ui/
