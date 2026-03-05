@@ -64,7 +64,7 @@ QUALITY RULES:
 - If the text is already well-written, return { "issues": [] }
 - Never return duplicate issues for the same text span
 - The "original" field must be an exact substring match from the input
-- The input may contain placeholders like [SSN-1], [PHONE-1], [EMAIL-1], etc. These represent redacted sensitive data. Do not flag them as spelling or punctuation errors. Treat them as normal words.`;
+- The input may contain placeholders like [SSN-xxxx-1], [PHONE-xxxx-1], [EMAIL-xxxx-1], etc. (where xxxx is a random hex nonce). These represent redacted sensitive data. Do not flag them as spelling or punctuation errors. Treat them as normal words.`;
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 

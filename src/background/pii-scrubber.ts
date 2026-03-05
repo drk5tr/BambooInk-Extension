@@ -52,19 +52,19 @@ const PII_PATTERNS: PiiPattern[] = [
 
   // Written long: March 15, 1990 / 15 March 1990 / Mar 15, 1990
   {
-    label: "DOB",
+    label: "DATE",
     regex: /\b(?:(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s+\d{4})\b/gi,
   },
 
   // ISO: 1990-03-15
   {
-    label: "DOB",
+    label: "DATE",
     regex: /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b/g,
   },
 
   // US numeric: 03/15/1990 (existing)
   {
-    label: "DOB",
+    label: "DATE",
     regex: /\b(?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2}\b/g,
   },
 
@@ -144,6 +144,8 @@ export function scrubPii(text: string): PiiScrubResult {
   // Track which character positions are already claimed by a replacement
   const claimed = new Set<number>();
   const counters = new Map<string, number>();
+  // Per-request nonce to avoid collisions with literal text
+  const nonce = Math.random().toString(16).slice(2, 6);
 
   for (const pattern of PII_PATTERNS) {
     // Reset regex lastIndex for each pass
@@ -168,7 +170,7 @@ export function scrubPii(text: string): PiiScrubResult {
       counters.set(pattern.label, count);
 
       replacements.push({
-        placeholder: `[${pattern.label}-${count}]`,
+        placeholder: `[${pattern.label}-${nonce}-${count}]`,
         original: match[0],
         index: start,
       });
@@ -207,7 +209,7 @@ export function scrubPii(text: string): PiiScrubResult {
       counters.set("PROPN", count);
 
       replacements.push({
-        placeholder: `[PROPN-${count}]`,
+        placeholder: `[PROPN-${nonce}-${count}]`,
         original: entity,
         index: idx,
       });
