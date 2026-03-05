@@ -14,7 +14,7 @@ Each issue shows the original text, the suggested fix, and a plain-English expla
 - **Real-time inline UI** -- Shadow DOM isolated overlay that works inside Gmail compose, Slack message boxes, and Salesforce case editors (including textarea-based chat widgets) without style conflicts
 - **Mutual exclusion** -- Only one overlay is visible at a time. Clicking an underline closes the suggestions panel; clicking the bamboo icon closes any open issue popup.
 - **Channel-aware checking** -- Automatically detects Gmail (email), Slack (chat), and Salesforce (email or internal note) and adjusts checking strictness. Chat mode is lenient with contractions and fragments; internal notes skip tone checking entirely. All channels enforce a professional tone.
-- **PII scrubbing** -- Before any text reaches the OpenAI API, sensitive data (SSNs, credit cards, bank accounts, phone numbers, emails, EINs, dates of birth, routing numbers) is replaced with safe placeholders. Original values are restored in the response before display. PII never leaves the extension.
+- **PII scrubbing** -- Before any text reaches the OpenAI API, sensitive data (SSNs, credit cards, bank accounts, phone numbers, emails, EINs, dates of birth, routing numbers) is replaced with safe placeholders. Names, places, and organizations are detected using the compromise NLP library for accurate proper noun scrubbing without false positives on pronouns or common words. Original values are restored in the response before display. PII never leaves the extension.
 - **CKEditor and iframe support** -- Detects and attaches to editors inside iframes and shadow DOM trees, with a polling fallback for edge cases. Underlines and popups render locally inside each iframe.
 - **Proper noun and acronym handling** -- The AI is instructed to skip capitalized proper nouns, URLs, email addresses, and a curated list of HR/payroll acronyms (PTO, FMLA, W-2, COBRA, etc.)
 - **Response caching** -- AI responses are cached in-memory with a 5-minute TTL to avoid redundant API calls
@@ -69,7 +69,7 @@ src/
   background/
     service-worker.ts     # Message router for all chrome.runtime handlers
     ai-grammar.ts         # OpenAI integration, caching, change gate
-    pii-scrubber.ts       # Regex PII detection and placeholder substitution
+    pii-scrubber.ts       # PII detection (regex + compromise NLP) and placeholder substitution
 
   content/
     content-script.ts     # Entry point: wires observers to message sends
@@ -129,6 +129,7 @@ User types in Gmail/Slack/Salesforce
 - Tailwind CSS 3 + PostCSS
 - Chrome Manifest V3
 - OpenAI GPT-4.1 mini
+- compromise NLP (proper noun detection)
 
 ## Privacy
 
