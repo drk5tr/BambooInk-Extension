@@ -160,10 +160,11 @@ function buildUserPrompt(
   }
 
   if (dismissed.length > 0) {
+    const scrubbedDismissed = dismissed.map(d => scrubPii(d).sanitized);
     parts.push(
       `SKIP THESE: The agent already reviewed or accepted corrections for these phrases. ` +
       `Do not flag any of them for any issue type (spelling, grammar, punctuation, or tone):\n` +
-      dismissed.map(d => `- "${d}"`).join("\n")
+      scrubbedDismissed.map(d => `- "${d}"`).join("\n")
     );
   }
 

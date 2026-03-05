@@ -23,30 +23,6 @@ export interface Settings {
   aiIdleMs: number;
 }
 
-// --- Check-word: single word at cursor ---
-
-export interface CheckWordMessage {
-  action: "check-word";
-  word: string;
-  context: string;
-}
-
-export interface CheckWordResponse {
-  misspelled: boolean;
-  suggestions: Array<{ word: string; score: number }>;
-}
-
-// --- Check-text: full text for grammar rules + batch spell ---
-
-export interface CheckTextMessage {
-  action: "check-text";
-  text: string;
-}
-
-export interface CheckTextResponse {
-  issues: Issue[];
-}
-
 // --- Settings & dictionary messages ---
 
 export interface GetSettingsMessage {
@@ -111,8 +87,6 @@ export interface UpdateAIGateMessage {
 }
 
 export type ExtensionMessage =
-  | CheckWordMessage
-  | CheckTextMessage
   | CheckGrammarAIMessage
   | GetSettingsMessage
   | UpdateSettingsMessage

@@ -3,12 +3,10 @@
  * CKEditor iframe detection, and polling fallback.
  */
 
-import { isTextField, getTextFromElement, getRealTarget, getWordAtCursor, replaceTextInElement, resolveEditorRoot } from "./injector";
-import type { WordAtCursor } from "./injector";
+import { isTextField, getTextFromElement, getRealTarget, replaceTextInElement, resolveEditorRoot } from "./injector";
 import { bumpAcceptGeneration, setLastAcceptedText } from "./overlay";
 
 export interface ObserverCallbacks {
-  onWordChange: (wordInfo: WordAtCursor, element: HTMLElement) => void;
   onTextChange: (text: string, element: HTMLElement) => void;
   onCursorMove: (element: HTMLElement) => void;
   onFocusIn: (element: HTMLElement) => void;

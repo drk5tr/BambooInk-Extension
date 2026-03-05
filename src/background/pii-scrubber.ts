@@ -8,17 +8,144 @@ interface PiiPattern {
   regex: RegExp;
 }
 
-// Order matters: more specific patterns first to avoid partial matches.
-// SSN before routing (9 digits), credit card before account (8-17 digits).
+// Order matters: more specific patterns first to prevent overlap.
+// URLs/keys first (contain emails, digits, tokens), then addresses (multi-token),
+// then dates, proper nouns, structured IDs, and broad catch-alls last.
 const PII_PATTERNS: PiiPattern[] = [
-  { label: "SSN",     regex: /\b\d{3}[-\s]\d{2}[-\s]\d{4}\b/g },
-  { label: "EIN",     regex: /\b\d{2}-\d{7}\b/g },
-  { label: "DOB",     regex: /\b(?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2}\b/g },
-  { label: "CARD",    regex: /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/g },
-  { label: "PHONE",   regex: /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g },
-  { label: "EMAIL",   regex: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g },
-  { label: "ACCOUNT", regex: /\b\d{8,17}\b/g },
+  // --- URLs & Keys (run first — URLs contain emails, digits, tokens) ---
+
+  // URLs with credentials: password=, token=, api_key= params, or basic-auth user:pass@host
+  {
+    label: "URL_CRED",
+    regex: /https?:\/\/(?:[^\s:@]+:[^\s:@]+@[^\s]+|[^\s]*(?:password|token|api_key|apikey|secret)=[^\s&]+[^\s]*)/gi,
+  },
+
+  // Known API key prefixes
+  {
+    label: "API_KEY",
+    regex: /\b(?:sk-[A-Za-z0-9_-]{20,}|pk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|xox[bpas]-[A-Za-z0-9-]{10,})/g,
+  },
+
+  // --- Addresses (multi-token, run before shorter patterns) ---
+
+  // Full address: 123 Oak St, Springfield, IL 62704
+  {
+    label: "ADDRESS",
+    regex: /\b\d{1,6}\s+(?:[A-Za-z]+\s+){1,3}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Place|Pl|Way|Circle|Cir|Terrace|Ter|Trail|Trl|Parkway|Pkwy|Highway|Hwy)\.?,?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/g,
+  },
+
+  // Street only: 123 Oak St
+  {
+    label: "STREET",
+    regex: /\b\d{1,6}\s+(?:[A-Za-z]+\s+){1,3}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Drive|Dr|Road|Rd|Lane|Ln|Court|Ct|Place|Pl|Way|Circle|Cir|Terrace|Ter|Trail|Trl|Parkway|Pkwy|Highway|Hwy)\.?\b/gi,
+  },
+
+  // City, ST ZIP: Springfield, IL 62704
+  {
+    label: "CITY_STATE_ZIP",
+    regex: /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/g,
+  },
+
+  // --- Dates (multiple formats, all labeled DOB) ---
+
+  // Written long: March 15, 1990 / 15 March 1990 / Mar 15, 1990
+  {
+    label: "DOB",
+    regex: /\b(?:(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s+\d{4})\b/gi,
+  },
+
+  // ISO: 1990-03-15
+  {
+    label: "DOB",
+    regex: /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b/g,
+  },
+
+  // US numeric: 03/15/1990 (existing)
+  {
+    label: "DOB",
+    regex: /\b(?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2}\b/g,
+  },
+
+  // --- Proper Nouns — mid-sentence capitalized words ---
+  // Matches Title Case words (first uppercase, rest lowercase) that appear mid-sentence.
+  // Skips: first word of text, first word after sentence-ending punctuation (.!?),
+  // after commas, and after dashes. All-caps acronyms are also skipped.
+  // The lookbehind requires a preceding char that is NOT whitespace, punctuation, comma, or dash,
+  // followed by whitespace. This ensures only true mid-word-flow positions are matched.
+  {
+    label: "PROPN",
+    regex: /(?<=[^.!?,\-\s]\s+)(?![A-Z]+\b[^a-z])[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g,
+  },
+
+  // --- Structured identifiers ---
+
+  // Email addresses (existing)
+  {
+    label: "EMAIL",
+    regex: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g,
+  },
+
+  // SSN: ###-##-#### (existing)
+  { label: "SSN", regex: /\b\d{3}[-\s]\d{2}[-\s]\d{4}\b/g },
+
+  // EIN: ##-####### (existing)
+  { label: "EIN", regex: /\b\d{2}-\d{7}\b/g },
+
+  // Credit/debit cards — separated formats + unseparated with known prefixes
+  {
+    label: "CARD",
+    regex:
+      /\b(?:\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{1,7}|\d{4}[-\s]\d{6}[-\s]\d{5}|4\d{15}|4\d{12}|5[1-5]\d{14}|3[47]\d{13}|6(?:011|5\d{2})\d{12}|3(?:0[0-5]|[68]\d)\d{11})\b/g,
+  },
+
+  // International phone (requires + prefix): +44 20 7946 0958
+  {
+    label: "PHONE",
+    regex: /\+\d{1,3}[\s.-]?\(?\d{1,4}\)?[\s.-]?\d{1,5}[\s.-]?\d{1,5}(?:[\s.-]?\d{1,5})?\b/g,
+  },
+
+  // US/CA phone + optional extension (existing, expanded)
+  {
+    label: "PHONE",
+    regex:
+      /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?:\s*(?:ext|x|extension)\.?\s*\d{1,6})?\b/gi,
+  },
+
+  // IPv6 addresses (hex groups with colons)
+  {
+    label: "IP",
+    regex:
+      /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b/g,
+  },
+
+  // IPv4 addresses (validated octets 0-255)
+  {
+    label: "IP",
+    regex:
+      /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g,
+  },
+
+  // Passport (context-required keyword + letter + 8 digits)
+  {
+    label: "PASSPORT",
+    regex:
+      /\bpassport\s*(?:#|number|no\.?|num\.?)\s*[A-Za-z]\d{6,9}\b/gi,
+  },
+
+  // Driver's license (context-required keyword + alphanumeric)
+  {
+    label: "DL",
+    regex:
+      /\b(?:driver'?s?\s*licen[sc]e|DL)\s*(?:#|number|no\.?|num\.?)\s*[A-Za-z0-9]{5,15}\b/gi,
+  },
+
+  // --- Broad catch-alls (run last) ---
+
+  // Routing numbers: exactly 9 digits
   { label: "ROUTING", regex: /\b\d{9}\b/g },
+
+  // Account numbers: 8-17 digits
+  { label: "ACCOUNT", regex: /\b\d{8,17}\b/g },
 ];
 
 export function scrubPii(text: string): PiiScrubResult {
@@ -85,7 +212,7 @@ export function restorePii(
 ): string {
   let result = text;
   for (const r of replacements) {
-    result = result.replace(r.placeholder, r.original);
+    result = result.split(r.placeholder).join(r.original);
   }
   return result;
 }
