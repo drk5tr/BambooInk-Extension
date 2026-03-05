@@ -1,6 +1,7 @@
 export interface IconState {
   issueCount: number;
   isLoading: boolean;
+  hasError?: boolean;
 }
 
 const ICON_ID = "bambooink-floating-icon";
@@ -56,14 +57,21 @@ export function renderIcon(
 
   // Badge
   let badge = icon.querySelector(".bambooink-badge") as HTMLElement | null;
-  if (state.issueCount > 0) {
+  if (state.hasError && state.issueCount === 0) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "bambooink-badge";
+      icon.appendChild(badge);
+    }
+    badge.textContent = "!";
+    icon.style.background = "#DC2626";
+  } else if (state.issueCount > 0) {
     if (!badge) {
       badge = document.createElement("span");
       badge.className = "bambooink-badge";
       icon.appendChild(badge);
     }
     badge.textContent = String(state.issueCount);
-    // Green icon when no issues would show checkmark, but with issues show count
     icon.style.background = "#15803D";
   } else {
     if (badge) badge.remove();

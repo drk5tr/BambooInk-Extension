@@ -75,6 +75,7 @@ export interface CheckGrammarAIMessage {
 
 export interface CheckGrammarAIResponse {
   issues: Issue[];
+  error?: string;
 }
 
 export interface ResetAIGateMessage {

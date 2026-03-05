@@ -100,6 +100,17 @@ export const SHADOW_STYLES = `
     display: block;
     margin-bottom: 6px;
   }
+  .bambooink-error {
+    padding: 16px 14px;
+    text-align: center;
+    color: #DC2626;
+    font-size: 13px;
+  }
+  .bambooink-error .warning {
+    font-size: 24px;
+    display: block;
+    margin-bottom: 6px;
+  }
 
   /* Issue Row */
   .bambooink-issue {

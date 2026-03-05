@@ -186,13 +186,13 @@ export async function checkGrammarAI(
   apiKey: string,
   channel: Channel = "email",
   dismissed: string[] = []
-): Promise<Issue[]> {
+): Promise<{ issues: Issue[]; error?: string }> {
   // Skip very short inputs
-  if (text.length < 15) return [];
+  if (text.length < 15) return { issues: [] };
 
   // Cache check
   const cached = getCached(text, channel);
-  if (cached) return cached;
+  if (cached) return { issues: cached };
 
   // Update tracking immediately to prevent duplicate calls during async API request
   lastAICheckedText = text;
@@ -221,12 +221,20 @@ export async function checkGrammarAI(
 
     if (!res.ok) {
       console.warn("[BambooInk] AI grammar API error:", res.status);
-      return [];
+      let error: string;
+      if (res.status === 401) {
+        error = "Invalid API key. Check your key in BambooInk options.";
+      } else if (res.status === 429) {
+        error = "Rate limited. Try again in a moment.";
+      } else {
+        error = `API error (${res.status}). Try again later.`;
+      }
+      return { issues: [], error };
     }
 
     const data = await res.json();
     const content = data.choices?.[0]?.message?.content;
-    if (!content) return [];
+    if (!content) return { issues: [] };
 
     // Strip markdown fences before parsing
     const cleaned = content
@@ -293,9 +301,10 @@ export async function checkGrammarAI(
     }
 
     setCache(text, channel, issues);
-    return issues;
+    return { issues };
   } catch (err) {
     console.warn("[BambooInk] AI grammar error:", err instanceof Error ? err.message : "unknown error");
-    return [];
+    const msg = err instanceof Error ? err.message : String(err);
+    return { issues: [], error: `Network error: ${msg}` };
   }
 }

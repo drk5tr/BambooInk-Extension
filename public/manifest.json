@@ -5,6 +5,7 @@
   "description": "AI-powered writing assistant that checks grammar, spelling, tone, and clarity in real-time.",
   "permissions": ["storage"],
   "host_permissions": [
+    "https://api.openai.com/*",
     "https://mail.google.com/*",
     "https://*.slack.com/*",
     "https://*.salesforce.com/*",

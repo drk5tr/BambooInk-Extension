@@ -1,7 +1,7 @@
 import "./content-script.css";
 import type { Settings, CheckGrammarAIResponse, Issue } from "../shared/types";
 import { setupObservers, setAiIdleMs, setActiveElement, isTextCheckSuppressed, getActiveElement } from "./observer";
-import { initUI, updateUI, hideUI, setCurrentIssues, getCurrentIssues, isInteractingWithOverlay, getDismissedOriginals, getAcceptGeneration, getLastAcceptedText } from "./overlay";
+import { initUI, updateUI, hideUI, setCurrentIssues, setCurrentError, getCurrentIssues, isInteractingWithOverlay, getDismissedOriginals, getAcceptGeneration, getLastAcceptedText } from "./overlay";
 import { detectChannel, getTextFromElement } from "./injector";
 
 let settings: Settings | null = null;
@@ -98,6 +98,7 @@ setupObservers({
           issues = issues.filter(i => !acceptedText.includes(i.original));
         }
         setCurrentIssues(issues);
+        setCurrentError(aiResponse.error);
         updateUI();
       }
     );

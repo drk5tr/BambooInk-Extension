@@ -20,8 +20,8 @@ chrome.runtime.onMessage.addListener(
           }
           const channel = message.channel || "email";
           const dismissed = message.dismissed || [];
-          const issues = await checkGrammarAI(message.text, apiKey, channel, dismissed);
-          sendResponse({ issues });
+          const result = await checkGrammarAI(message.text, apiKey, channel, dismissed);
+          sendResponse({ issues: result.issues, error: result.error });
         });
         return true;
       }

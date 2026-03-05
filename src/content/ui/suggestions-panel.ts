@@ -2,6 +2,7 @@ import type { Issue } from "../../shared/types";
 
 export interface PanelState {
   issues: Issue[];
+  error?: string;
 }
 
 export interface PanelCallbacks {
@@ -59,7 +60,12 @@ export function renderPanel(
   const body = document.createElement("div");
   body.className = "bambooink-panel-body";
 
-  if (state.issues.length === 0) {
+  if (state.error && state.issues.length === 0) {
+    const errorDiv = document.createElement("div");
+    errorDiv.className = "bambooink-error";
+    errorDiv.innerHTML = `<span class="warning">\u26A0</span>${escapeHtml(state.error)}`;
+    body.appendChild(errorDiv);
+  } else if (state.issues.length === 0) {
     const noIssues = document.createElement("div");
     noIssues.className = "bambooink-no-issues";
     noIssues.innerHTML = `<span class="check">\u2713</span>Looking good! No issues found.`;

@@ -52,6 +52,7 @@ let panelOpen = false;
 let currentIssues: Issue[] = [];
 let acceptGeneration = 0;
 let lastAcceptedText = "";
+let currentError: string | undefined;
 let activePopupIssueId: string | null = null;
 
 export function getAcceptGeneration(): number {
@@ -76,6 +77,14 @@ export function getCurrentIssues(): Issue[] {
 
 export function setCurrentIssues(issues: Issue[]): void {
   currentIssues = issues;
+}
+
+export function getCurrentError(): string | undefined {
+  return currentError;
+}
+
+export function setCurrentError(error: string | undefined): void {
+  currentError = error;
 }
 
 function ensureOverlayContainer(): { container: HTMLDivElement; shadow: ShadowRoot } {
@@ -281,7 +290,7 @@ export function updateUI(): void {
 
   renderIcon(
     shadow,
-    { issueCount: currentIssues.length, isLoading: false },
+    { issueCount: currentIssues.length, isLoading: false, hasError: !!currentError },
     iconX,
     iconY,
     () => {
@@ -311,6 +320,7 @@ export function updateUI(): void {
 
       const panelState: PanelState = {
         issues: currentIssues,
+        error: currentError,
       };
 
       renderPanel(shadow, panelState, panelX, panelY, {
@@ -360,6 +370,7 @@ export function hideUI(): void {
     hideIssuePopup(shadowRoot);
   }
   currentIssues = [];
+  currentError = undefined;
   panelOpen = false;
   activePopupIssueId = null;
   lastAcceptedText = "";
