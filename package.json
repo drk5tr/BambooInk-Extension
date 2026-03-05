@@ -26,6 +26,7 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
+    "compromise": "^14.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

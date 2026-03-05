@@ -1,3 +1,5 @@
+import nlp from "compromise/three";
+
 export interface PiiScrubResult {
   sanitized: string;
   replacements: Array<{ placeholder: string; original: string; index: number }>;
@@ -64,17 +66,6 @@ const PII_PATTERNS: PiiPattern[] = [
   {
     label: "DOB",
     regex: /\b(?:0[1-9]|1[0-2])[/\-](?:0[1-9]|[12]\d|3[01])[/\-](?:19|20)\d{2}\b/g,
-  },
-
-  // --- Proper Nouns — mid-sentence capitalized words ---
-  // Matches Title Case words (first uppercase, rest lowercase) that appear mid-sentence.
-  // Skips: first word of text, first word after sentence-ending punctuation (.!?),
-  // after commas, and after dashes. All-caps acronyms are also skipped.
-  // The lookbehind requires a preceding char that is NOT whitespace, punctuation, comma, or dash,
-  // followed by whitespace. This ensures only true mid-word-flow positions are matched.
-  {
-    label: "PROPN",
-    regex: /(?<=[^.!?,\-\s]\s+)(?![A-Z]+\b[^a-z])[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g,
   },
 
   // --- Structured identifiers ---
@@ -181,6 +172,47 @@ export function scrubPii(text: string): PiiScrubResult {
         original: match[0],
         index: start,
       });
+    }
+  }
+
+  // --- NLP-based proper noun detection (people, places, organizations) ---
+  const doc = nlp(text);
+  const entities = [
+    ...doc.people().out("array") as string[],
+    ...doc.places().out("array") as string[],
+    ...doc.organizations().out("array") as string[],
+  ];
+
+  for (const raw of entities) {
+    // Compromise can include trailing punctuation (e.g. "Chase,") — strip it
+    const entity = raw.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (!entity) continue;
+    let searchFrom = 0;
+    while (true) {
+      const idx = text.indexOf(entity, searchFrom);
+      if (idx === -1) break;
+      const end = idx + entity.length;
+
+      // Skip if any part overlaps an already-claimed range
+      let overlaps = false;
+      for (let i = idx; i < end; i++) {
+        if (claimed.has(i)) { overlaps = true; break; }
+      }
+      if (overlaps) { searchFrom = idx + 1; continue; }
+
+      // Claim these positions
+      for (let i = idx; i < end; i++) claimed.add(i);
+
+      const count = (counters.get("PROPN") || 0) + 1;
+      counters.set("PROPN", count);
+
+      replacements.push({
+        placeholder: `[PROPN-${count}]`,
+        original: entity,
+        index: idx,
+      });
+
+      searchFrom = end;
     }
   }
 
